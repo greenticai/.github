@@ -175,12 +175,13 @@ Exit policy:
 
 # Prerequisites
 
-Install Rust 1.91 or better via `rustup` if needed:
+Install Rust 1.91 or better via `rustup` if needed as well as binstall:
 
 ``` bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup toolchain install 1.91.0
 rustup target add wasm32-wasip2
+cargo install cargo-binstall
 ```
 
 Confirm installation:
