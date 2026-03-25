@@ -10,11 +10,11 @@ on:
       clippy-args:
         description: "Arguments passed to cargo clippy"
         type: string
-        default: "--all-targets --all-features -- -D warnings"
+        default: "--workspace --all-targets --all-features -- -D warnings"
       test-args:
         description: "Arguments passed to cargo test"
         type: string
-        default: "--all-features"
+        default: "--workspace --all-features"
       run-semver-checks:
         description: "Run cargo-semver-checks against last published version"
         type: boolean
@@ -73,4 +73,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
       - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          rust-toolchain: manual
