@@ -76,6 +76,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - uses: obi1kenobi/cargo-semver-checks-action@v2

@@ -103,7 +103,9 @@ jobs:
         run: cargo check ${{ inputs.wasm-check-args }}
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
-        run: cargo install cargo-component --version ${{ inputs.cargo-component-version }} --locked
+        uses: cargo-bins/cargo-binstall@main
+        with:
+          tool: cargo-component@${{ inputs.cargo-component-version }}
       - name: Build (wasm32-wasip2, release)
         run: |
           if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
