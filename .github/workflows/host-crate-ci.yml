@@ -1,0 +1,76 @@
+name: Host Crate CI
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.91.0"
+      clippy-args:
+        description: "Arguments passed to cargo clippy"
+        type: string
+        default: "--all-targets --all-features -- -D warnings"
+      test-args:
+        description: "Arguments passed to cargo test"
+        type: string
+        default: "--all-features"
+      run-semver-checks:
+        description: "Run cargo-semver-checks against last published version"
+        type: boolean
+        default: false
+      setup-script:
+        description: "Optional shell commands to run before checks (e.g., ci/prefetch.sh)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: rustfmt
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - run: cargo clippy ${{ inputs.clippy-args }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - run: cargo test ${{ inputs.test-args }}
+
+  semver-checks:
+    if: ${{ inputs.run-semver-checks }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
