@@ -27,10 +27,22 @@ on:
         description: "cargo-component version to install (only when use-cargo-component is true)"
         type: string
         default: "0.21.1"
+      wasm-check-args:
+        description: "Arguments passed to cargo check for WASM target (e.g., '-p component-qa --target wasm32-wasip2')"
+        type: string
+        default: "--target wasm32-wasip2"
+      wasm-build-args:
+        description: "Arguments passed to cargo build for WASM target (e.g., '-p component-qa --target wasm32-wasip2 --release')"
+        type: string
+        default: "--target wasm32-wasip2 --release"
       validate-component:
         description: "Validate WASM output is a valid WIT component via wasm-tools"
         type: boolean
         default: true
+      wasm-validate-glob:
+        description: "Glob pattern for .wasm files to validate"
+        type: string
+        default: "target/wasm32-wasip2/release/*.wasm"
 
 permissions:
   contents: read
@@ -88,16 +100,16 @@ jobs:
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - name: Check (wasm32-wasip2)
-        run: cargo check --target wasm32-wasip2
+        run: cargo check ${{ inputs.wasm-check-args }}
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
         run: cargo install cargo-component --version ${{ inputs.cargo-component-version }} --locked
       - name: Build (wasm32-wasip2, release)
         run: |
           if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
-            cargo component build --release --target wasm32-wasip2
+            cargo component build ${{ inputs.wasm-build-args }}
           else
-            cargo build --target wasm32-wasip2 --release
+            cargo build ${{ inputs.wasm-build-args }}
           fi
       - name: Install wasm-tools
         if: ${{ inputs.validate-component }}
@@ -108,14 +120,14 @@ jobs:
         if: ${{ inputs.validate-component }}
         run: |
           count=0
-          for wasm in target/wasm32-wasip2/release/*.wasm; do
+          for wasm in ${{ inputs.wasm-validate-glob }}; do
             [ -f "$wasm" ] || continue
             echo "Validating: $wasm"
             wasm-tools component wit "$wasm"
             count=$((count + 1))
           done
           if [ "$count" -eq 0 ]; then
-            echo "::error::No .wasm files found in target/wasm32-wasip2/release/"
+            echo "::error::No .wasm files found matching ${{ inputs.wasm-validate-glob }}"
             exit 1
           fi
           echo "Validated $count component(s)"
