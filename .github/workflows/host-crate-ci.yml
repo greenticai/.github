@@ -19,6 +19,10 @@ on:
         description: "Run cargo-semver-checks against last published version"
         type: boolean
         default: false
+      semver-checks-package:
+        description: "Comma-separated list of packages to check (empty = all packages, which fails on unpublished crates)"
+        type: string
+        default: ""
       setup-script:
         description: "Optional shell commands to run before checks (e.g., ci/prefetch.sh)"
         type: string
@@ -82,3 +86,4 @@ jobs:
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           rust-toolchain: manual
+          package: ${{ inputs.semver-checks-package }}

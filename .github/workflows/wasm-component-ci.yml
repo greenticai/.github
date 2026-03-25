@@ -99,13 +99,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
-      - name: Check (wasm32-wasip2)
-        run: cargo check ${{ inputs.wasm-check-args }}
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
         uses: cargo-bins/cargo-binstall@main
         with:
           tool: cargo-component@${{ inputs.cargo-component-version }}
+      - name: Check (wasm32-wasip2)
+        run: |
+          if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
+            cargo component check ${{ inputs.wasm-check-args }}
+          else
+            cargo check ${{ inputs.wasm-check-args }}
+          fi
       - name: Build (wasm32-wasip2, release)
         run: |
           if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
