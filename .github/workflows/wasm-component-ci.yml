@@ -130,11 +130,16 @@ jobs:
           for wasm in ${{ inputs.wasm-validate-glob }}; do
             [ -f "$wasm" ] || continue
             echo "Validating: $wasm"
-            wasm-tools component wit "$wasm"
+            wasm-tools validate "$wasm"
+            if wasm-tools component wit "$wasm" > /dev/null 2>&1; then
+              echo "  ✓ valid WIT component"
+            else
+              echo "  ✓ valid core module (not a component)"
+            fi
             count=$((count + 1))
           done
           if [ "$count" -eq 0 ]; then
             echo "::error::No .wasm files found matching ${{ inputs.wasm-validate-glob }}"
             exit 1
           fi
-          echo "Validated $count component(s)"
+          echo "Validated $count module(s)"
