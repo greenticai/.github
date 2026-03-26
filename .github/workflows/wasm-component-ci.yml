@@ -101,7 +101,10 @@ jobs:
         run: ${{ inputs.setup-script }}
       - name: Install cargo-binstall
         if: ${{ inputs.use-cargo-component || inputs.validate-component }}
-        uses: cargo-bins/cargo-binstall@main
+        uses: taiki-e/install-action@cargo-binstall
+      - name: Ensure cargo bin path is on PATH
+        if: ${{ inputs.use-cargo-component || inputs.validate-component }}
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
         run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }}
@@ -121,10 +124,22 @@ jobs:
           fi
       - name: Install wasm-tools
         if: ${{ inputs.validate-component }}
-        run: cargo binstall -y wasm-tools
+        run: cargo binstall -y wasm-tools --force
+      - name: Verify wasm-tools
+        if: ${{ inputs.validate-component }}
+        run: |
+          echo "PATH=$PATH"
+          ls -la "$HOME/.cargo/bin" || true
+          command -v wasm-tools
+          wasm-tools --version
       - name: Validate component
         if: ${{ inputs.validate-component }}
         run: |
+          set -euo pipefail
+          command -v wasm-tools >/dev/null 2>&1 || {
+            echo "::error::wasm-tools missing from PATH=$PATH"
+            exit 127
+          }
           count=0
           for wasm in ${{ inputs.wasm-validate-glob }}; do
             [ -f "$wasm" ] || continue
