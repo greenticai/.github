@@ -42,7 +42,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
-          components: rustfmt
+          components: rustfmt, clippy
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - run: cargo fmt --all -- --check
@@ -54,7 +54,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
