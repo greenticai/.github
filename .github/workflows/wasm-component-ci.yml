@@ -99,11 +99,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
+      - name: Install cargo-binstall
+        if: ${{ inputs.use-cargo-component || inputs.validate-component }}
+        uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
-        uses: cargo-bins/cargo-binstall@main
-        with:
-          tool: cargo-component@${{ inputs.cargo-component-version }}
+        run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }}
       - name: Check (wasm32-wasip2)
         run: |
           if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
@@ -120,9 +121,7 @@ jobs:
           fi
       - name: Install wasm-tools
         if: ${{ inputs.validate-component }}
-        uses: cargo-bins/cargo-binstall@main
-        with:
-          tool: wasm-tools
+        run: cargo binstall -y wasm-tools
       - name: Validate component
         if: ${{ inputs.validate-component }}
         run: |
