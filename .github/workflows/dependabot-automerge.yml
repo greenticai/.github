@@ -1,0 +1,97 @@
+name: Dependabot auto-merge
+
+on:
+  workflow_call:
+    inputs:
+      merge-method:
+        description: "GraphQL merge method (SQUASH, MERGE, REBASE)"
+        type: string
+        default: "SQUASH"
+      max-attempts:
+        description: "Retry attempts for unstable status"
+        type: number
+        default: 8
+      retry-delay-seconds:
+        description: "Delay between retries in seconds"
+        type: number
+        default: 15
+      approve:
+        description: "Auto-approve the PR before enabling auto-merge"
+        type: boolean
+        default: true
+    secrets:
+      GH_PAT:
+        description: "Personal access token (optional, falls back to GITHUB_TOKEN)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  automerge:
+    # Only act on non-draft Dependabot PRs. Requires repo setting: "Allow auto-merge" enabled.
+    # Ensure branch protection lists required checks; auto-merge waits for them to pass.
+    if: >
+      (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'app/dependabot') &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    # Job-level override: only this job needs write permissions.
+    permissions:
+      pull-requests: write
+      contents: write
+
+    steps:
+      - name: Enable auto-merge for Dependabot PRs
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+
+            if (${{ inputs.approve }}) {
+              try {
+                await github.rest.pulls.createReview({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  event: "APPROVE",
+                  body: "Auto-approving Dependabot PR."
+                });
+              } catch (error) {
+                core.warning(`Could not approve PR: ${error.message}`);
+              }
+            }
+
+            const mutation = `
+              mutation EnableAutoMerge($pullRequestId: ID!) {
+                enablePullRequestAutoMerge(input: {
+                  pullRequestId: $pullRequestId,
+                  mergeMethod: ${{ inputs.merge-method }}
+                }) {
+                  pullRequest { number autoMergeRequest { enabledAt } }
+                }
+              }
+            `;
+
+            const maxAttempts = ${{ inputs.max-attempts }};
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              try {
+                await github.graphql(mutation, { pullRequestId: pr.node_id });
+                core.info(`Enabled auto-merge on attempt ${attempt}.`);
+                break;
+              } catch (error) {
+                const message = error.message || String(error);
+                const isUnstable = message.includes("unstable status");
+                const isLastAttempt = attempt === maxAttempts;
+
+                if (!isUnstable || isLastAttempt) {
+                  core.warning(`Could not enable auto-merge: ${message}`);
+                  break;
+                }
+
+                core.warning(`PR not stable yet (attempt ${attempt}/${maxAttempts}); retrying in ${{ inputs.retry-delay-seconds }} seconds.`);
+                await new Promise((resolve) => setTimeout(resolve, ${{ inputs.retry-delay-seconds }} * 1000));
+              }
+            }
