@@ -6,7 +6,7 @@ on:
       rust-version:
         description: "Rust toolchain version"
         type: string
-        default: "1.91.0"
+        default: "1.94.0"
       clippy-args:
         description: "Arguments passed to cargo clippy"
         type: string
