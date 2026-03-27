@@ -1,0 +1,197 @@
+name: Auto tag
+
+on:
+  workflow_call:
+    inputs:
+      toolchain:
+        description: "Rust toolchain (only used in name-v mode for cargo metadata)"
+        type: string
+        default: "stable"
+      tag-format:
+        description: "name-v ({name}-v{ver}), v (v{ver}), or auto-increment (patch bump)"
+        type: string
+        default: "name-v"
+      check-diff:
+        description: "Only tag crates whose Cargo.toml changed in this push (name-v and v modes)"
+        type: boolean
+        default: true
+      create-release:
+        description: "Create a GitHub Release for each new tag"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  autotag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (full history for tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        if: inputs.tag-format == 'name-v'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.toolchain }}
+
+      - name: Cache cargo registry
+        if: inputs.tag-format == 'name-v'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Detect and create tags
+        id: tagging
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          TAG_FORMAT: ${{ inputs.tag-format }}
+          CHECK_DIFF: ${{ inputs.check-diff }}
+        run: |
+          set -euo pipefail
+
+          # ── helpers (embedded version-tools.sh) ──────────────────
+          list_crates() {
+            cargo metadata --format-version 1 --no-deps \
+              | jq -r '.packages[] | "\(.name) \(.version) \(.manifest_path)"'
+          }
+
+          crate_dir_from_manifest() {
+            local manifest="$1"
+            local repo_root
+            repo_root=$(git rev-parse --show-toplevel)
+            realpath --relative-to="$repo_root" "$(dirname "$manifest")"
+          }
+
+          changed_paths() {
+            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              git diff --name-only HEAD~1 HEAD
+            else
+              # First commit in repo — treat everything as changed
+              git ls-tree --full-tree --name-only HEAD
+            fi
+          }
+
+          # ── main ─────────────────────────────────────────────────
+          new_tags=()
+
+          case "${TAG_FORMAT}" in
+            name-v)
+              mapfile -t crates < <(list_crates)
+              if [ "${#crates[@]}" -eq 0 ]; then
+                echo "No crates found. Nothing to tag."
+                exit 0
+              fi
+
+              paths=$(changed_paths)
+
+              for line in "${crates[@]}"; do
+                name=$(awk '{print $1}' <<< "$line")
+                version=$(awk '{print $2}' <<< "$line")
+                manifest=$(awk '{print $3}' <<< "$line")
+                tag="${name}-v${version}"
+
+                if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+                  echo "::notice::Tag ${tag} already exists — skipping."
+                  continue
+                fi
+
+                if [ "${CHECK_DIFF}" = "true" ]; then
+                  crate_dir=$(crate_dir_from_manifest "$manifest")
+                  if [ "$crate_dir" = "." ]; then
+                    cargo_toml="Cargo.toml"
+                  else
+                    cargo_toml="${crate_dir}/Cargo.toml"
+                  fi
+                  if ! grep -Fxq "${cargo_toml}" <<< "${paths}"; then
+                    echo "No change in ${cargo_toml} — skipping ${name}."
+                    continue
+                  fi
+                fi
+
+                echo "Creating tag ${tag}"
+                git tag -a "${tag}" -m "${name} ${version}"
+                new_tags+=("${tag}")
+              done
+              ;;
+
+            v)
+              version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+              if [ -z "${version}" ]; then
+                echo "::error::Could not extract version from Cargo.toml"
+                exit 1
+              fi
+
+              tag="v${version}"
+
+              if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+                echo "::notice::Tag ${tag} already exists — skipping."
+                exit 0
+              fi
+
+              if [ "${CHECK_DIFF}" = "true" ]; then
+                paths=$(changed_paths)
+                if ! grep -Fxq "Cargo.toml" <<< "${paths}"; then
+                  echo "No change in Cargo.toml — skipping."
+                  exit 0
+                fi
+              fi
+
+              echo "Creating tag ${tag}"
+              git tag -a "${tag}" -m "${tag}"
+              new_tags+=("${tag}")
+              ;;
+
+            auto-increment)
+              last_tag=$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || echo "")
+              if [ -z "${last_tag}" ]; then
+                next_tag="v0.1.0"
+              else
+                version_str="${last_tag#v}"
+                IFS='.' read -r major minor patch <<< "$version_str"
+                patch=$((patch + 1))
+                next_tag="v${major}.${minor}.${patch}"
+              fi
+
+              if git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; then
+                echo "::notice::Tag ${next_tag} already exists — skipping."
+                exit 0
+              fi
+
+              echo "Creating tag ${next_tag}"
+              git tag -a "${next_tag}" -m "${next_tag}"
+              new_tags+=("${next_tag}")
+              ;;
+
+            *)
+              echo "::error::Unknown tag-format: ${TAG_FORMAT}. Use name-v, v, or auto-increment."
+              exit 1
+              ;;
+          esac
+
+          if [ "${#new_tags[@]}" -gt 0 ]; then
+            git push origin "${new_tags[@]}"
+            echo "Pushed ${#new_tags[@]} tag(s): ${new_tags[*]}"
+            printf '%s\n' "${new_tags[@]}" > /tmp/new-tags.txt
+            echo "has_tags=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new tags created."
+            echo "has_tags=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Releases
+        if: inputs.create-release && steps.tagging.outputs.has_tags == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            echo "Creating release for ${tag}"
+            gh release create "${tag}" --generate-notes --title "${tag}"
+          done < /tmp/new-tags.txt
