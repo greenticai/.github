@@ -1,0 +1,88 @@
+# Repo → toolchain variant mapping for all Greentic Rust repos.
+# Used by sync-toolchain.sh to determine which rust-toolchain.toml to copy.
+#
+# Variants:
+#   host — standard Rust toolchain (no WASM target)
+#   wasm — includes wasm32-wasip2 target
+#
+# Add new repos here when created. Remove when archived.
+
+# ─── greenticai org ───────────────────────────────────────────────
+
+[greenticai.host]
+repos = [
+    "events-provider-codex",
+    "greentic",
+    "greentic-bundle",
+    "greentic-cards2pack",
+    "greentic-config",
+    "greentic-conformance",
+    "greentic-control-chain",
+    "greentic-demo",
+    "greentic-deployer",
+    "greentic-dev",
+    "greentic-distributor-client",
+    "greentic-dwbase",
+    "greentic-events",
+    "greentic-flow",
+    "greentic-gui",
+    "greentic-i18n",
+    "greentic-integration",
+    "greentic-interfaces",
+    "greentic-mcp",
+    "greentic-messaging",
+    "greentic-operator",
+    "greentic-provision",
+    "greentic-qa",
+    "greentic-redbutton",
+    "greentic-secrets",
+    "greentic-session",
+    "greentic-setup",
+    "greentic-start",
+    "greentic-state",
+    "greentic-telemetry",
+    "greentic-test-flow-a",
+    "greentic-test-flow-b",
+    "greentic-test-types",
+    "greentic-types",
+    "greentic-x",
+    "serde-yaml-gtc",
+]
+
+[greenticai.wasm]
+repos = [
+    "component-adaptive-card",
+    "component-deployer",
+    "component-fast2flow",
+    "component-flow2flow",
+    "component-llm-openai",
+    "component-oauth-card",
+    "component-script-rhai",
+    "component-templates",
+    "components-public",
+    "greentic-component",
+    "greentic-events-providers",
+    "greentic-messaging-providers",
+    "greentic-oauth",
+    "greentic-pack",
+    "greentic-runner",
+]
+
+# ─── greentic-biz org ─────────────────────────────────────────────
+
+[greentic-biz.host]
+repos = [
+    "customers-tools",
+    "greentic-distributor",
+    "greentic-repo",
+    "greentic-store",
+    "zain-x",
+]
+
+[greentic-biz.wasm]
+repos = [
+    "commercial-components",
+    "greentic-card",
+    "greentic-fast2flow",
+    "greentic-mcp-generator",
+]
