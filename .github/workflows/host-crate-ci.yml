@@ -27,6 +27,10 @@ on:
         description: "Optional shell commands to run before checks (e.g., ci/prefetch.sh)"
         type: string
         default: ""
+      toolchain-variant:
+        description: "Canonical toolchain variant (host or wasm) for drift check"
+        type: string
+        default: "host"
 
 permissions:
   contents: read
@@ -35,6 +39,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  toolchain-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check toolchain drift
+        run: |
+          VARIANT="${{ inputs.toolchain-variant }}"
+          BASE="https://raw.githubusercontent.com/greenticai/.github/main/toolchain"
+
+          curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
+          curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
+
+          DRIFT=0
+          if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
+            echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
+            diff rust-toolchain.toml /tmp/canonical-toolchain.toml || true
+            DRIFT=1
+          fi
+          if ! diff -q rustfmt.toml /tmp/canonical-rustfmt.toml >/dev/null 2>&1; then
+            echo "::warning::rustfmt.toml differs from canonical"
+            diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
+            DRIFT=1
+          fi
+          # Warning-only initially; upgrade to exit $DRIFT after stabilization
+
   fmt:
     runs-on: ubuntu-latest
     steps:
