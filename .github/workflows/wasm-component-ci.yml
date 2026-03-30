@@ -136,7 +136,7 @@ jobs:
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
-        run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }}
+        run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }} --force
       - name: Check (wasm32-wasip2)
         run: |
           if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
