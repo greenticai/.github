@@ -1,0 +1,81 @@
+name: CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: "CodeQL languages (comma-separated, e.g. 'rust', 'javascript-typescript')"
+        type: string
+        default: "rust"
+      rust-version:
+        description: "Rust toolchain version (only when languages includes rust)"
+        type: string
+        default: "1.94.0"
+      build-command:
+        description: "Custom build command (empty = autobuild)"
+        type: string
+        default: ""
+      setup-script:
+        description: "Optional shell commands to run before analysis (e.g., ci/prefetch.sh)"
+        type: string
+        default: ""
+      config-file:
+        description: "Path to CodeQL config file (empty = default)"
+        type: string
+        default: ""
+      query-suite:
+        description: "CodeQL query suite"
+        type: string
+        default: "security-and-quality"
+      toolchain-variant:
+        description: "host or wasm — controls wasm32-wasip2 target install"
+        type: string
+        default: "host"
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        if: contains(inputs.languages, 'rust')
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - name: Add wasm32-wasip2 target
+        if: contains(inputs.languages, 'rust') && inputs.toolchain-variant == 'wasm'
+        run: rustup target add wasm32-wasip2
+
+      - name: Rust cache
+        if: contains(inputs.languages, 'rust')
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.languages }}
+          config-file: ${{ inputs.config-file || '' }}
+          queries: ${{ inputs.query-suite }}
+
+      - name: Autobuild
+        if: inputs.build-command == ''
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Custom build
+        if: inputs.build-command != ''
+        run: ${{ inputs.build-command }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
