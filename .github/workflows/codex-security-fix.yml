@@ -79,6 +79,7 @@ jobs:
           MAX_ALERTS: ${{ inputs.max_alerts }}
           INCLUDE_ALL: ${{ inputs.include_all_alerts }}
           IS_PR: ${{ github.event.pull_request && 'true' || 'false' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_VULN_CHANGES: ${{ steps.dependency_review.outputs.vulnerable-changes }}
           PR_COMMENT_CONTENT: ${{ steps.dependency_review.outputs.comment-content }}
         run: |
@@ -88,13 +89,41 @@ jobs:
             echo "$PR_VULN_CHANGES" > pr-vulnerable-changes.json
             echo "$PR_COMMENT_CONTENT" > pr-comment.md
 
+            # Skip Dependabot alerts on PRs (dependency-review-action handles those)
             echo "[]" > all-dependabot-alerts.json
             echo "[]" > dependabot-alerts.json
-            echo "[]" > all-code-scanning-alerts.json
-            echo "[]" > code-scanning-alerts.json
-            echo '{"dependabot": [], "code_scanning": []}' > security-alerts.json
-            echo "count=0" >> "$GITHUB_OUTPUT"
-            echo "Skipping global alerts fetch for pull request - Codex will only evaluate PR vulnerabilities."
+
+            # Fetch Code Scanning alerts (produced by CodeQL runs on main)
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${OWNER}/${REPO}/code-scanning/alerts?state=open&per_page=100" \
+              > all-code-scanning-alerts.json || echo "[]" > all-code-scanning-alerts.json
+
+            # Get files changed in this PR
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
+              --jq '.[].filename' > pr-changed-files.txt || echo "" > pr-changed-files.txt
+
+            # Filter code scanning alerts to only those in PR-changed files
+            jq --rawfile changed_files pr-changed-files.txt '
+              ($changed_files | split("\n") | map(select(. != ""))) as $files |
+              [ .[] | select(.most_recent_instance.location.path as $p | $files | any(. == $p)) ]
+            ' all-code-scanning-alerts.json > pr-code-scanning-filtered.json \
+              || echo "[]" > pr-code-scanning-filtered.json
+
+            # Apply max_alerts limit
+            jq ".[0:(${MAX_ALERTS}|tonumber)]" pr-code-scanning-filtered.json > code-scanning-alerts.json
+
+            CODE_COUNT=$(jq 'length' code-scanning-alerts.json)
+
+            jq -n \
+              --slurpfile dependabot dependabot-alerts.json \
+              --slurpfile code_scanning code-scanning-alerts.json \
+              '{dependabot: $dependabot[0], code_scanning: $code_scanning[0]}' > security-alerts.json
+
+            echo "count=${CODE_COUNT}" >> "$GITHUB_OUTPUT"
+            echo "Found ${CODE_COUNT} Code Scanning alerts in PR-changed files (filtered from $(jq 'length' all-code-scanning-alerts.json) total)"
             exit 0
           fi
 
@@ -127,6 +156,8 @@ jobs:
 
       - name: Build Codex prompt
         if: steps.codex_available.outputs.enabled == 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
+        env:
+          IS_PR: ${{ github.event.pull_request && 'true' || 'false' }}
         run: |
           set -euo pipefail
           cat > codex-prompt.txt <<'PROMPT'
@@ -142,6 +173,26 @@ jobs:
           PROMPT
 
           cat security-alerts.json >> codex-prompt.txt
+
+          # Add compact CodeQL section for PRs with filtered alerts
+          if [ "${IS_PR}" == "true" ] && [ -f code-scanning-alerts.json ] && [ "$(jq 'length' code-scanning-alerts.json 2>/dev/null)" -gt 0 ]; then
+            cat >> codex-prompt.txt <<'CODEQL_SECTION'
+
+          CodeQL Code Scanning Alerts (filtered to files changed in this PR):
+          The following alerts were found by CodeQL static analysis in files touched by this PR.
+          Each alert includes the file path, line range, rule ID, and description.
+          Please review and fix these issues in the relevant files.
+          CODEQL_SECTION
+            jq '[.[] | {
+              rule: .rule.id,
+              severity: .rule.security_severity_level,
+              description: .rule.description,
+              file: .most_recent_instance.location.path,
+              start_line: .most_recent_instance.location.start_line,
+              end_line: .most_recent_instance.location.end_line,
+              message: .most_recent_instance.message.text
+            }]' code-scanning-alerts.json >> codex-prompt.txt
+          fi
 
           if [ -s pr-vulnerable-changes.json ]; then
             echo -e "\n\nNew PR Dependency Vulnerabilities:" >> codex-prompt.txt
@@ -211,6 +262,8 @@ jobs:
             all-code-scanning-alerts.json
             dependabot-alerts.json
             code-scanning-alerts.json
+            pr-code-scanning-filtered.json
+            pr-changed-files.txt
             security-alerts.json
             codex-prompt.txt
             SECURITY_FIX_REPORT.md
