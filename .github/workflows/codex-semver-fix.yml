@@ -1,0 +1,200 @@
+name: Codex Semver Fix
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: "Branch to scan and patch (only for manual dispatch)"
+        type: string
+        default: ""
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.94.0"
+      semver-checks-package:
+        description: "Comma-separated list of packages to check (empty = all)"
+        type: string
+        default: ""
+      setup-script:
+        description: "Optional shell commands to run before checks"
+        type: string
+        default: ""
+    secrets:
+      GH_PAT:
+        description: "Personal access token (optional, falls back to GITHUB_TOKEN)"
+        required: false
+      OPENAI_API_KEY:
+        description: "OpenAI API key for Codex remediation"
+        required: false
+      CODEX_OPENAI_API_KEY:
+        description: "Alternative Codex API key"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  codex-fix:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check Codex availability
+        id: codex_available
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_OPENAI_API_KEY:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Codex API key is not configured; skipping semver remediation."
+          fi
+
+      - name: Loop guard – skip if triggered by own commit
+        id: loop_guard
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          COMMIT_MSG=$(gh api \
+            "/repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" \
+            --jq '.commit.message' 2>/dev/null || echo "")
+          if echo "$COMMIT_MSG" | grep -q "chore(semver): codex remediation"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Head commit is a Codex semver remediation – skipping to prevent loop."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout code
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Rust
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+
+      - name: Run setup script
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Install cargo-semver-checks
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        run: cargo install cargo-semver-checks --locked
+
+      - name: Run semver-checks
+        id: semver
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+
+          PACKAGE_ARG=""
+          if [ -n "${{ inputs.semver-checks-package }}" ]; then
+            IFS=',' read -ra PKGS <<< "${{ inputs.semver-checks-package }}"
+            for pkg in "${PKGS[@]}"; do
+              PACKAGE_ARG="${PACKAGE_ARG} -p ${pkg}"
+            done
+          fi
+
+          echo "Running: cargo semver-checks check-release ${PACKAGE_ARG}"
+          if cargo semver-checks check-release ${PACKAGE_ARG} 2>&1 | tee semver-output.txt; then
+            echo "status=pass" >> "$GITHUB_OUTPUT"
+            echo "No semver violations found."
+          else
+            echo "status=fail" >> "$GITHUB_OUTPUT"
+            echo "Semver violations detected — will attempt Codex remediation."
+          fi
+
+      - name: Build Codex prompt
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && steps.semver.outputs.status == 'fail'
+        run: |
+          set -euo pipefail
+          cat > codex-prompt.txt <<'PROMPT'
+          You are operating in a CI environment as a Rust Semver Reviewer.
+
+          Task:
+          1) Analyze the cargo-semver-checks violations listed below.
+          2) Apply minimal, safe fixes to resolve each violation.
+          3) Write SEMVER_FIX_REPORT.md summarizing your actions.
+
+          Fix strategies (in order of preference):
+          - For "enum variant added on exhaustive enum": add #[non_exhaustive] to the enum.
+          - For "constructible struct adds field": add #[non_exhaustive] to the struct.
+          - For "enum variant discriminant changed": add explicit discriminant values to preserve the original ordering, OR add #[non_exhaustive].
+          - For removed/renamed public items: restore the old item as a deprecated alias if possible.
+          - As a last resort: bump the crate version (minor for 0.x crates, major for 1.x+).
+
+          Important rules:
+          - Do NOT change any logic or behavior — only add attributes or version bumps.
+          - Do NOT modify test files unless a test directly asserts on a removed item.
+          - Prefer #[non_exhaustive] over version bumps — it is the least disruptive fix.
+          - If adding #[non_exhaustive], also ensure existing match arms have a wildcard `_ => {}` catch-all where needed in the same crate.
+
+          cargo-semver-checks output:
+          PROMPT
+
+          cat semver-output.txt >> codex-prompt.txt
+
+      - name: Run Codex remediation
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && steps.semver.outputs.status == 'fail'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_OPENAI_API_KEY }}
+          prompt-file: codex-prompt.txt
+          codex-args: '["--full-auto"]'
+
+      - name: Commit and push fixes
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && steps.semver.outputs.status == 'fail'
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref || inputs.branch }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [ ! -f SEMVER_FIX_REPORT.md ]; then
+            echo "No changes created by Codex"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "chore(semver): codex remediation for semver violations" || echo "No changes to commit"
+          git push origin "HEAD:${BRANCH}"
+
+      - name: Post Codex Review
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && steps.semver.outputs.status == 'fail' && github.event.pull_request
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          if [ -f SEMVER_FIX_REPORT.md ]; then
+            echo "Posting semver fix report to ${PR_URL}"
+            gh pr review "${PR_URL}" --comment --body-file SEMVER_FIX_REPORT.md
+          fi
+
+      - name: Upload remediation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-semver-run
+          path: |
+            semver-output.txt
+            codex-prompt.txt
+            SEMVER_FIX_REPORT.md
+          if-no-files-found: ignore
