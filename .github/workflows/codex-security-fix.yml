@@ -54,15 +54,33 @@ jobs:
             echo "Codex API key is not configured; skipping Codex remediation."
           fi
 
+      - name: Loop guard – skip if triggered by own commit
+        id: loop_guard
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          COMMIT_MSG=$(gh api \
+            "/repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" \
+            --jq '.commit.message' 2>/dev/null || echo "")
+          if [ "$COMMIT_MSG" = "chore(security): codex remediation for security alerts" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Head commit is a Codex remediation commit – skipping to prevent loop."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout code
-        if: steps.codex_available.outputs.enabled == 'true'
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Dependency Review
-        if: steps.codex_available.outputs.enabled == 'true' && github.event.pull_request
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && github.event.pull_request
         id: dependency_review
         uses: actions/dependency-review-action@v4
         with:
@@ -70,7 +88,7 @@ jobs:
           warn-only: true
 
       - name: Fetch open security alerts
-        if: steps.codex_available.outputs.enabled == 'true'
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
         id: alerts
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -155,7 +173,7 @@ jobs:
           echo "Found ${DEP_COUNT} open Dependabot alerts and ${CODE_COUNT} open Code Scanning alerts"
 
       - name: Build Codex prompt
-        if: steps.codex_available.outputs.enabled == 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
         env:
           IS_PR: ${{ github.event.pull_request && 'true' || 'false' }}
         run: |
@@ -200,7 +218,7 @@ jobs:
           fi
 
       - name: Run Codex remediation
-        if: steps.codex_available.outputs.enabled == 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_OPENAI_API_KEY }}
@@ -208,7 +226,7 @@ jobs:
           codex-args: '["--full-auto"]'
 
       - name: Commit and push fixes
-        if: steps.codex_available.outputs.enabled == 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
         env:
           BRANCH: ${{ github.event.pull_request.head.ref || inputs.branch }}
         run: |
@@ -226,7 +244,7 @@ jobs:
           git push origin "HEAD:${BRANCH}"
 
       - name: Post Codex Review
-        if: steps.codex_available.outputs.enabled == 'true' && github.event.pull_request
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && github.event.pull_request
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
