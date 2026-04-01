@@ -1,0 +1,200 @@
+name: Dependency Review
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-severity:
+        description: "Minimum CVSS severity to fail (low, moderate, high, critical)"
+        type: string
+        default: "moderate"
+      warn-only:
+        description: "Never fail — only annotate (for grace period rollout)"
+        type: boolean
+        default: false
+      allow-licenses:
+        description: "SPDX license allowlist (empty = no license check)"
+        type: string
+        default: ""
+      deny-licenses:
+        description: "SPDX license denylist (empty = no license check)"
+        type: string
+        default: ""
+    secrets:
+      GH_PAT:
+        description: "Personal access token for push access (Codex fix job)"
+        required: false
+      OPENAI_API_KEY:
+        description: "OpenAI API key for Codex remediation"
+        required: false
+      CODEX_OPENAI_API_KEY:
+        description: "Alternative Codex API key"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Job 1: Always-running dependency review (the required check) ───
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      vulnerable-changes: ${{ steps.review.outputs.vulnerable-changes }}
+      has-vulnerabilities: ${{ steps.check_vulns.outputs.has-vulnerabilities }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run dependency review
+        id: review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          warn-only: ${{ inputs.warn-only }}
+          allow-licenses: ${{ inputs.allow-licenses }}
+          deny-licenses: ${{ inputs.deny-licenses }}
+          comment-summary-in-pr: "on-failure"
+
+      - name: Check for vulnerabilities
+        id: check_vulns
+        shell: bash
+        run: |
+          set -euo pipefail
+          VULN_CHANGES='${{ steps.review.outputs.vulnerable-changes }}'
+          if [ -n "$VULN_CHANGES" ] && [ "$VULN_CHANGES" != "[]" ] && [ "$VULN_CHANGES" != "" ]; then
+            echo "has-vulnerabilities=true" >> "$GITHUB_OUTPUT"
+            echo "Vulnerable dependency changes detected."
+          else
+            echo "has-vulnerabilities=false" >> "$GITHUB_OUTPUT"
+            echo "No vulnerable dependency changes."
+          fi
+
+  # ── Job 2: Optional Codex auto-remediation for vulnerable deps ─────
+  codex-dependency-fix:
+    needs: dependency-review
+    if: >-
+      needs.dependency-review.outputs.has-vulnerabilities == 'true'
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check Codex availability
+        id: codex_available
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_OPENAI_API_KEY:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Codex API key is not configured; skipping dependency remediation."
+          fi
+
+      - name: Loop guard - skip if triggered by own commit
+        id: loop_guard
+        if: steps.codex_available.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          COMMIT_MSG=$(gh api \
+            "/repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" \
+            --jq '.commit.message' 2>/dev/null || echo "")
+          if [ "$COMMIT_MSG" = "chore(deps): codex remediation for vulnerable dependencies" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Head commit is a Codex dependency remediation – skipping to prevent loop."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout PR branch
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Build Codex prompt
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        env:
+          VULN_CHANGES: ${{ needs.dependency-review.outputs.vulnerable-changes }}
+        run: |
+          set -euo pipefail
+          cat > codex-prompt.txt <<'PROMPT'
+          You are operating in a CI environment as a Dependency Security Reviewer.
+
+          Task:
+          1) Analyze the vulnerable dependency changes listed below (JSON from dependency-review-action).
+          2) Update version constraints in Cargo.toml / package.json to resolve the vulnerabilities.
+          3) If this is a Rust project, run `cargo update` after modifying Cargo.toml.
+          4) Prefer relaxing version constraints over pinning exact versions.
+          5) If no fix is available for a vulnerability (e.g., no patched version exists), note it in the report but do not make changes for it.
+          6) Write DEPENDENCY_FIX_REPORT.md summarizing your actions.
+
+          Important rules:
+          - Do NOT change any application logic — only dependency version constraints.
+          - Do NOT downgrade dependencies unless required to fix a vulnerability.
+          - For Rust: prefer `cargo update -p <package>` over editing Cargo.lock directly.
+          - For npm: prefer updating package.json constraints, then `npm install` or `yarn install`.
+
+          Vulnerable dependency changes (JSON):
+          PROMPT
+
+          echo "$VULN_CHANGES" >> codex-prompt.txt
+
+      - name: Run Codex remediation
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_OPENAI_API_KEY }}
+          prompt-file: codex-prompt.txt
+          codex-args: '["--full-auto"]'
+
+      - name: Commit and push fixes
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [ ! -f DEPENDENCY_FIX_REPORT.md ]; then
+            echo "No changes created by Codex"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "chore(deps): codex remediation for vulnerable dependencies" || echo "No changes to commit"
+          git push origin "HEAD:${BRANCH}"
+
+      - name: Post Codex Review
+        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          if [ -f DEPENDENCY_FIX_REPORT.md ]; then
+            echo "Posting dependency fix report to ${PR_URL}"
+            gh pr review "${PR_URL}" --comment --body-file DEPENDENCY_FIX_REPORT.md
+          fi
+
+      - name: Upload remediation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-dependency-fix-run
+          path: |
+            codex-prompt.txt
+            DEPENDENCY_FIX_REPORT.md
+          if-no-files-found: ignore
