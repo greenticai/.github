@@ -98,7 +98,7 @@ jobs:
             echo "Codex API key is not configured; skipping dependency remediation."
           fi
 
-      - name: Loop guard - skip if triggered by own commit
+      - name: Loop guard – skip if triggered by any Codex remediation commit
         id: loop_guard
         if: steps.codex_available.outputs.enabled == 'true'
         env:
@@ -108,9 +108,9 @@ jobs:
           COMMIT_MSG=$(gh api \
             "/repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" \
             --jq '.commit.message' 2>/dev/null || echo "")
-          if [ "$COMMIT_MSG" = "chore(deps): codex remediation for vulnerable dependencies" ]; then
+          if echo "$COMMIT_MSG" | grep -qE "^chore\((security|semver|deps)\): codex remediation"; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Head commit is a Codex dependency remediation – skipping to prevent loop."
+            echo "Head commit is a Codex remediation commit – skipping to prevent loop."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
