@@ -1,88 +1,534 @@
-# Repo → toolchain variant mapping for all Greentic Rust repos.
-# Used by sync-toolchain.sh to determine which rust-toolchain.toml to copy.
+# REPO_MANIFEST.toml — Canonical registry of all Greentic Rust repos.
+# Single source of truth for toolchain variants, dependency tiers, crate publish
+# lists, and version-track configuration.
 #
-# Variants:
-#   host — standard Rust toolchain (no WASM target)
-#   wasm — includes wasm32-wasip2 target
+# Used by: sync-toolchain.sh, onboard-repo.sh, branch-develop.sh,
+#          sync-dev-publish.sh, nightly-develop.yml, weekly-stable-*.yml
 #
-# Add new repos here when created. Remove when archived.
+# Fields:
+#   org                   — GitHub org (greenticai | greentic-biz)
+#   variant               — Toolchain variant (host | wasm)
+#   tier                  — Dependency tier (0-8). Lower tiers publish first.
+#   publishes             — Ordered crate list for cargo publish. Empty = no publish.
+#   version-track         — { from, to } for version bumping. Omit to skip bumping.
+#   weekly-stable-enabled — Progressive rollout flag for weekly crates.io releases.
+#   archived              — true for read-only repos. All scripts skip these.
 
-# ─── greenticai org ───────────────────────────────────────────────
+# ─── Tier 0 — Foundation ────────────────────────────────────────
 
-[greenticai.host]
-repos = [
-    "events-provider-codex",
-    "greentic",
-    "greentic-bundle",
-    "greentic-cards2pack",
-    "greentic-config",
-    "greentic-conformance",
-    "greentic-control-chain",
-    "greentic-demo",
-    "greentic-deployer",
-    "greentic-dev",
-    "greentic-distributor-client",
-    "greentic-dw",
-    "greentic-dwbase",
-    "greentic-flow",
-    "greentic-gui",
-    "greentic-i18n",
-    "greentic-integration",
-    "greentic-interfaces",
-    "greentic-mcp",
-    "greentic-operator",
-    "greentic-perf",
-    "greentic-provision",
-    "greentic-redbutton",
-    "greentic-secrets",
-    "greentic-session",
-    "greentic-setup",
-    "greentic-start",
-    "greentic-state",
-    "greentic-telemetry",
-    "greentic-test-flow-a",
-    "greentic-test-flow-b",
-    "greentic-test-types",
-    "greentic-types",
-    "greentic-x",
-    "serde-yaml-gtc",
-]
+[repos.greentic-types]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-types-macros", "greentic-types"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
 
-[greenticai.wasm]
-repos = [
-    "component-adaptive-card",
-    "component-deployer",
-    "component-fast2flow",
-    "component-flow2flow",
-    "component-llm-openai",
-    "component-oauth-card",
-    "component-script-rhai",
-    "component-templates",
-    "components-public",
-    "greentic-component",
-    "greentic-events-providers",
-    "greentic-messaging-providers",
-    "greentic-oauth",
-    "greentic-pack",
-    "greentic-qa",
-    "greentic-runner",
-]
+[repos.greentic-interfaces]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-interfaces", "greentic-interfaces-guest", "greentic-interfaces-wasmtime", "greentic-interfaces-host"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
 
-# ─── greentic-biz org ─────────────────────────────────────────────
+[repos.greentic-telemetry]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-telemetry"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
 
-[greentic-biz.host]
-repos = [
-    "customers-tools",
-    "greentic-distributor",
-    "greentic-repo",
-    "greentic-store",
-    "zain-x",
-]
+[repos.greentic-i18n]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-i18n-lib", "greentic-i18n-translator"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
 
-[greentic-biz.wasm]
-repos = [
-    "commercial-components",
-    "greentic-card",
-    "greentic-fast2flow",
-    "greentic-mcp-generator",
-]
+[repos.serde-yaml-gtc]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["serde_yaml_gtc"]
+# No version-track: serde_yaml_gtc is at 2.5.x, separate version track.
+# Bump scripts skip repos without version-track.
+weekly-stable-enabled = false
+
+# ─── Tier 1 — Core ──────────────────────────────────────────────
+
+[repos.greentic-config]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["greentic-config-types", "greentic-config"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-session]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["greentic-session"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-state]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["greentic-state"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-secrets]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = []  # 17 publishable crates — populate with correct order before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-component]
+org = "greenticai"
+variant = "wasm"
+tier = 1
+publishes = ["greentic-component-manifest", "greentic-component", "greentic-component-store", "greentic-component-runtime"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-distributor-client]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["greentic-distributor-client", "greentic-distributor-dev"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-qa]
+org = "greenticai"
+variant = "wasm"
+tier = 1
+publishes = ["qa-spec", "component-qa", "greentic-qa-lib"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 2 — Flow + OAuth ──────────────────────────────────────
+
+[repos.greentic-flow]
+org = "greenticai"
+variant = "host"
+tier = 2
+publishes = ["greentic-flow"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-oauth]
+org = "greenticai"
+variant = "wasm"
+tier = 2
+publishes = ["greentic-oauth-core", "greentic-oauth-broker", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 3 — Packaging ─────────────────────────────────────────
+
+[repos.greentic-pack]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = ["greentic-pack-lib", "pack_component", "pack_component_template", "greentic-pack"]
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-bundle]
+org = "greenticai"
+variant = "host"
+tier = 3
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-cards2pack]
+org = "greenticai"
+variant = "host"
+tier = 3
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 4 — Runtime ───────────────────────────────────────────
+
+[repos.greentic-runner]
+org = "greenticai"
+variant = "wasm"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-messaging-providers]
+org = "greenticai"
+variant = "wasm"
+tier = 4
+publishes = []  # WASM provider components
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-events-providers]
+org = "greenticai"
+variant = "wasm"
+tier = 4
+publishes = []  # WASM provider components
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.events-provider-codex]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-start]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-operator]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-control-chain]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-mcp]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-gui]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-dwbase]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-dw]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 5 — CLI / Tooling ─────────────────────────────────────
+
+[repos.greentic]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = []  # CLI binary — publish handled separately
+version-track = { from = "0.9", to = "0.10" }
+weekly-stable-enabled = false
+
+[repos.greentic-dev]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-setup]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-provision]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-deployer]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 6 — Components (WASM, no publish) ─────────────────────
+
+[repos.component-adaptive-card]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-deployer]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-fast2flow]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-flow2flow]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-llm-openai]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-oauth-card]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-script-rhai]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.component-templates]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.components-public]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 7 — Extensions / Testing ──────────────────────────────
+
+[repos.greentic-x]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-conformance]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # test suites, not published
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-integration]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # test harness, not published
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-perf]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # perf tests, not published
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-redbutton]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-demo]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # demo bundles, not published
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-test-flow-a]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # test fixtures
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-test-flow-b]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # test fixtures
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-test-types]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # test fixtures
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Tier 8 — Business (greentic-biz org) ───────────────────────
+
+[repos.greentic-mcp-generator]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-fast2flow]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-card]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.commercial-components]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-distributor]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-repo]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-store]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.customers-tools]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.zain-x]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+# ─── Archived (read-only, skipped by all scripts) ───────────────
+
+[repos.greentic-messaging]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
+
+[repos.greentic-events]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
