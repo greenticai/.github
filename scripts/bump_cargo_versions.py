@@ -115,11 +115,13 @@ class Bumper:
         to_major: int,
         to_minor: int,
         dry_run: bool,
+        deps_only: bool = False,
     ):
         self.from_prefix = from_prefix
         self.to_version = f"{to_major}.{to_minor}.0"
         self.range_spec = _make_range(to_major, to_minor)
         self.dry_run = dry_run
+        self.deps_only = deps_only
         self.files_changed = 0
 
     # -- public entry point ------------------------------------------------
@@ -130,14 +132,16 @@ class Bumper:
 
         changes: list[str] = []
 
-        # 1) workspace.package.version
         ws = data.get("workspace", {})
-        ws_pkg = ws.get("package", {})
-        self._bump_package_version(ws_pkg, changes)
 
-        # 2) package.version  (only if it's a plain string, not workspace=true)
-        pkg = data.get("package", {})
-        self._bump_package_version(pkg, changes)
+        # 1) workspace.package.version (skip in --deps-only mode)
+        if not self.deps_only:
+            ws_pkg = ws.get("package", {})
+            self._bump_package_version(ws_pkg, changes)
+
+            # 2) package.version  (only if it's a plain string, not workspace=true)
+            pkg = data.get("package", {})
+            self._bump_package_version(pkg, changes)
 
         # 3) workspace.dependencies
         ws_deps = ws.get("dependencies", {})
@@ -256,6 +260,11 @@ def main() -> None:
         help="Target version prefix (e.g. 0.5)",
     )
     parser.add_argument(
+        "--deps-only",
+        action="store_true",
+        help="Only convert dep specs to range format, skip version bumping",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would change without modifying files",
@@ -282,6 +291,7 @@ def main() -> None:
         to_major=to_major,
         to_minor=to_minor,
         dry_run=args.dry_run,
+        deps_only=args.deps_only,
     )
 
     # Walk all Cargo.toml files, skip target/ directories
