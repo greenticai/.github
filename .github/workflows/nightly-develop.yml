@@ -1,0 +1,53 @@
+name: Nightly Develop
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 2 AM UTC daily
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Process a specific tier only (empty = all tiers 0-8)'
+        required: false
+        type: string
+        default: ''
+      force:
+        description: 'Skip change detection — publish all repos'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  orchestrate:
+    name: Tier-ordered dev publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Orchestrate dev publishing
+        env:
+          GH_TOKEN: ${{ secrets.GH_NIGHTLY_TOKEN }}
+          INPUT_TIER: ${{ inputs.tier }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: bash scripts/nightly-develop-orchestrate.sh
+
+  notify-failure:
+    name: Notify on failure
+    needs: [orchestrate]
+    if: failure()
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: nightly-develop
+      step: orchestration
+      error: "Nightly dev-publish orchestration failed — check the run log"
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
