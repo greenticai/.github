@@ -256,7 +256,7 @@ process_tier() {
 
 # ── Parse manifest ───────────────────────────────────────────────
 # Output: tab-separated "tier\torg\tname" lines, sorted by tier.
-# Only repos with non-empty publishes and not archived.
+# Only repos with dev-publish-enabled=true, non-empty publishes, not archived.
 get_repos() {
   python3 -c "
 import tomllib
@@ -267,6 +267,8 @@ for name, entry in m.get('repos', {}).items():
     if entry.get('archived', False):
         continue
     if not entry.get('publishes', []):
+        continue
+    if not entry.get('dev-publish-enabled', False):
         continue
     tier = entry.get('tier', 99)
     entries.append((tier, entry['org'], name))
