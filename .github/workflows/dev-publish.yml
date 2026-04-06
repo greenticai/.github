@@ -1,0 +1,226 @@
+name: Dev Publish
+
+on:
+  workflow_call:
+    inputs:
+      crates:
+        description: "Space-separated ordered list of crates to publish (dependency order)"
+        required: true
+        type: string
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.94.0"
+      run-tests:
+        description: "Run fmt/clippy/build/test before publish"
+        type: boolean
+        default: true
+      setup-script:
+        description: "Optional shell commands to run before build (e.g., ci/setup.sh)"
+        type: string
+        default: ""
+      wasm-target:
+        description: "Add wasm32-wasip2 target for WASM component repos"
+        type: boolean
+        default: false
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_REGION:
+        required: true
+      CODEARTIFACT_DOMAIN:
+        required: true
+      CODEARTIFACT_DOMAIN_OWNER:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-test:
+    name: CI (fmt / clippy / build / test)
+    if: inputs.run-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: rustfmt, clippy
+          targets: ${{ inputs.wasm-target && 'wasm32-wasip2' || '' }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: build
+        run: cargo build --workspace --all-features
+
+      - name: test
+        run: cargo test --workspace --all-features -- --nocapture
+
+  publish:
+    name: Publish dev crates to CodeArtifact
+    needs: [build-test]
+    if: always() && (needs.build-test.result == 'success' || needs.build-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get CodeArtifact token
+        id: token
+        run: |
+          token=$(aws codeartifact get-authorization-token \
+            --domain "${{ secrets.CODEARTIFACT_DOMAIN }}" \
+            --domain-owner "${{ secrets.CODEARTIFACT_DOMAIN_OWNER }}" \
+            --region "$AWS_REGION" \
+            --query authorizationToken \
+            --output text)
+          echo "::add-mask::$token"
+          echo "CARGO_REGISTRIES_CORP_ARTIFACTS_GREENTIC_TOKEN=${token}" >> "$GITHUB_ENV"
+
+      - name: Configure CodeArtifact registry
+        run: |
+          set -euo pipefail
+          endpoint=$(aws codeartifact get-repository-endpoint \
+            --domain "${{ secrets.CODEARTIFACT_DOMAIN }}" \
+            --domain-owner "${{ secrets.CODEARTIFACT_DOMAIN_OWNER }}" \
+            --repository greentic \
+            --format cargo \
+            --region "$AWS_REGION" \
+            --query repositoryEndpoint \
+            --output text)
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<EOF
+          [registries.corp-artifacts-greentic]
+          index = "sparse+${endpoint}"
+          credential-provider = "cargo:token"
+          EOF
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Stamp dev version
+        id: version
+        run: |
+          set -euo pipefail
+
+          # Extract base version from workspace.package or package section
+          if grep -q '^\[workspace\.package\]' Cargo.toml; then
+            base=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
+          else
+            base=$(sed -n '/^\[package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
+          fi
+
+          if [ -z "$base" ]; then
+            echo "::error::Could not extract base version from Cargo.toml"
+            exit 1
+          fi
+
+          dev="${base}-dev.${GITHUB_RUN_ID}"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "dev=${dev}" >> "$GITHUB_OUTPUT"
+          echo "Stamping version: ${base} → ${dev}"
+
+          # Stamp all Cargo.toml files (skip target/ build artifacts)
+          find . -name Cargo.toml -not -path './target/*' -print0 | while IFS= read -r -d '' f; do
+            if grep -q "^version = \"${base}\"" "$f"; then
+              sed -i "s/^version = \"${base}\"/version = \"${dev}\"/" "$f"
+              echo "  stamped ${f}"
+            fi
+          done
+
+      - name: Publish crates
+        env:
+          DEV_VERSION: ${{ steps.version.outputs.dev }}
+        run: |
+          set -euo pipefail
+
+          publish_crate() {
+            local crate="$1"
+            local max_retries=3
+            local delay=10
+            local attempt=0
+            local output=""
+
+            while [ "$attempt" -lt "$max_retries" ]; do
+              attempt=$((attempt + 1))
+              echo "::group::Publishing ${crate} (attempt ${attempt}/${max_retries})"
+
+              if output=$(cargo publish -p "${crate}" \
+                  --registry corp-artifacts-greentic \
+                  --allow-dirty 2>&1); then
+                echo "$output"
+                echo "::endgroup::"
+                echo "✓ Published ${crate} ${DEV_VERSION}"
+                return 0
+              fi
+
+              echo "$output"
+              echo "::endgroup::"
+
+              # "already exists" → treat as success (safe retry of partial run)
+              if echo "$output" | grep -qiE "already exists|already uploaded|crate version .* is already uploaded"; then
+                echo "✓ ${crate} already published — skipping (idempotent)"
+                return 0
+              fi
+
+              # Rate-limited or transient server error → retry with backoff
+              if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
+                echo "⚠ Transient error, retrying in ${delay}s..."
+                sleep "$delay"
+                delay=$((delay * 2))
+                [ "$delay" -gt 120 ] && delay=120
+                continue
+              fi
+
+              # Other error → fail immediately (bad metadata, auth failure, etc.)
+              echo "::error::Failed to publish ${crate}: non-retryable error"
+              return 1
+            done
+
+            echo "::error::Failed to publish ${crate} after ${max_retries} attempts"
+            return 1
+          }
+
+          echo "Publishing crates: ${{ inputs.crates }}"
+          echo "Dev version: ${DEV_VERSION}"
+          echo ""
+
+          published=0
+          for crate in ${{ inputs.crates }}; do
+            publish_crate "$crate"
+            published=$((published + 1))
+            echo "Waiting 5s for index propagation..."
+            sleep 5
+          done
+
+          echo ""
+          echo "✓ All ${published} crate(s) published successfully"

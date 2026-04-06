@@ -1,0 +1,85 @@
+name: Notify Failure
+
+on:
+  workflow_call:
+    inputs:
+      workflow-name:
+        description: "Name of the failed workflow (e.g., dev-publish, weekly-stable)"
+        required: true
+        type: string
+      repo:
+        description: "Repository name (e.g., greentic-types)"
+        required: false
+        type: string
+        default: ""
+      tier:
+        description: "Tier number"
+        required: false
+        type: string
+        default: ""
+      step:
+        description: "Step that failed (e.g., publish, build-test)"
+        required: false
+        type: string
+        default: ""
+      error:
+        description: "Error summary"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS:
+        required: true
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Post failure to Slack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build message
+        id: msg
+        run: |
+          set -euo pipefail
+
+          repo="${{ inputs.repo }}"
+          tier="${{ inputs.tier }}"
+          step="${{ inputs.step }}"
+          error="${{ inputs.error }}"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          text=":red_circle: *${{ inputs.workflow-name }}* failed"
+
+          if [ -n "$repo" ]; then
+            text="${text}\n*Repo:* ${repo}"
+          fi
+          if [ -n "$tier" ]; then
+            text="${text} (tier ${tier})"
+          fi
+          if [ -n "$step" ]; then
+            text="${text}\n*Step:* ${step}"
+          fi
+          if [ -n "$error" ]; then
+            text="${text}\n*Error:* ${error}"
+          fi
+          text="${text}\n*Run:* <${run_url}|View workflow run>"
+
+          # Escape for JSON
+          text=$(echo -e "$text" | jq -Rs .)
+          echo "payload={\"text\":${text}}" >> "$GITHUB_OUTPUT"
+
+      - name: Post to Slack
+        run: |
+          set -euo pipefail
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H 'Content-type: application/json' \
+            --data '${{ steps.msg.outputs.payload }}' \
+            "${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}")
+
+          if [ "$response" -ne 200 ]; then
+            echo "::warning::Slack notification failed (HTTP ${response})"
+          else
+            echo "Slack notification sent"
+          fi
