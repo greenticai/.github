@@ -118,6 +118,12 @@ jobs:
             --output text)
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
+          [source.crates-io]
+          replace-with = "corp-artifacts-greentic"
+
+          [source.corp-artifacts-greentic]
+          registry = "sparse+${endpoint}"
+
           [registries.corp-artifacts-greentic]
           index = "sparse+${endpoint}"
           credential-provider = "cargo:token"
