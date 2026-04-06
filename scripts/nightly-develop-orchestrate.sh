@@ -121,14 +121,21 @@ wait_for_all() {
       local run_id="${entry##*:}"
       local name="${repo##*/}"
 
-      local status="" conclusion=""
-      read -r status conclusion < <(
-        gh run view "$run_id" --repo "$repo" \
+      local result
+      if ! result=$(gh run view "$run_id" --repo "$repo" \
           --json status,conclusion \
-          --jq '[.status, .conclusion // ""] | @tsv' 2>/dev/null
-      ) || true
+          --jq '[.status, .conclusion // ""] | @tsv' 2>&1); then
+        warn "gh run view failed for $name (run $run_id): $result"
+        ((pending++)) || true
+        continue
+      fi
+
+      local status conclusion
+      status=$(echo "$result" | cut -f1)
+      conclusion=$(echo "$result" | cut -f2)
 
       if [[ -z "$status" ]]; then
+        warn "Empty status for $name (run $run_id), raw: '$result'"
         ((pending++)) || true
         continue
       fi
