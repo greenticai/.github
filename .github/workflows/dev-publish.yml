@@ -118,12 +118,6 @@ jobs:
             --output text)
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
-          [source.crates-io]
-          replace-with = "corp-artifacts-greentic"
-
-          [source.corp-artifacts-greentic]
-          registry = "sparse+${endpoint}"
-
           [registries.corp-artifacts-greentic]
           index = "sparse+${endpoint}"
           credential-provider = "cargo:token"
@@ -150,7 +144,14 @@ jobs:
             exit 1
           fi
 
-          dev="${base}-dev.${GITHUB_RUN_ID}"
+          # Use {major}.{minor}.{GITHUB_RUN_ID} — a normal (non-pre-release)
+          # version. Cargo's semver crate has strict pre-release matching rules
+          # that prevent "0.4.58-dev.X" from matching range specs like
+          # ">=0.4.0-0, <0.5.0-0" (requires same M.m.p on the comparator).
+          # Normal versions match all range specs and pass cargo package
+          # dep validation against crates.io.
+          major_minor="${base%.*}"
+          dev="${major_minor}.${GITHUB_RUN_ID}"
           echo "base=${base}" >> "$GITHUB_OUTPUT"
           echo "dev=${dev}" >> "$GITHUB_OUTPUT"
           echo "Stamping version: ${base} → ${dev}"
@@ -162,80 +163,6 @@ jobs:
               echo "  stamped ${f}"
             fi
           done
-
-      - name: Pin path dep versions
-        env:
-          DEV_VERSION: ${{ steps.version.outputs.dev }}
-        run: |
-          set -euo pipefail
-
-          # Cargo's semver crate only matches pre-release versions when the
-          # comparator has a pre-release on the SAME major.minor.patch.
-          # Range specs like ">=0.4.0-0, <0.5.0-0" do NOT match "0.4.58-dev.X"
-          # because 0.4.0 != 0.4.58. This breaks workspace resolution when
-          # package versions are stamped to pre-release dev versions.
-          #
-          # Fix: pin intra-workspace path deps to the exact dev version.
-          # Cross-repo deps (no path) keep their range — they resolve from
-          # crates.io stable versions.
-
-          pip install --quiet tomli_w 2>/dev/null || pip install --quiet --break-system-packages tomli_w
-
-          python3 - "$DEV_VERSION" <<'PYEOF'
-          import tomllib, sys, os, glob
-          try:
-              import tomli_w
-          except ImportError:
-              print("::error::tomli_w not available")
-              sys.exit(1)
-
-          dev_version = sys.argv[1]
-
-          for toml_path in sorted(glob.glob("**/Cargo.toml", recursive=True)):
-              if "/target/" in toml_path or "\\target\\" in toml_path:
-                  continue
-
-              with open(toml_path, "rb") as f:
-                  data = tomllib.load(f)
-
-              modified = False
-
-              # Pin workspace.dependencies entries that have both path and version
-              ws_deps = data.get("workspace", {}).get("dependencies", {})
-              for dep_name, dep_val in ws_deps.items():
-                  if isinstance(dep_val, dict) and "path" in dep_val and "version" in dep_val:
-                      old = dep_val["version"]
-                      dep_val["version"] = f"={dev_version}"
-                      print(f"  {toml_path}: {dep_name} version {old!r} → \"={dev_version}\"")
-                      modified = True
-
-              # Pin [dependencies], [dev-dependencies], [build-dependencies]
-              for section in ("dependencies", "dev-dependencies", "build-dependencies"):
-                  deps = data.get(section, {})
-                  for dep_name, dep_val in deps.items():
-                      if isinstance(dep_val, dict) and "path" in dep_val and "version" in dep_val:
-                          old = dep_val["version"]
-                          dep_val["version"] = f"={dev_version}"
-                          print(f"  {toml_path}: [{section}] {dep_name} version {old!r} → \"={dev_version}\"")
-                          modified = True
-
-              # Pin target-specific dependencies
-              for target_cfg, target_val in data.get("target", {}).items():
-                  for section in ("dependencies", "dev-dependencies", "build-dependencies"):
-                      deps = target_val.get(section, {})
-                      for dep_name, dep_val in deps.items():
-                          if isinstance(dep_val, dict) and "path" in dep_val and "version" in dep_val:
-                              old = dep_val["version"]
-                              dep_val["version"] = f"={dev_version}"
-                              print(f"  {toml_path}: [target.{target_cfg}.{section}] {dep_name} → \"={dev_version}\"")
-                              modified = True
-
-              if modified:
-                  with open(toml_path, "wb") as f:
-                      tomli_w.dump(data, f)
-
-          print("Path dep pinning complete")
-          PYEOF
 
       - name: Publish crates
         env:
