@@ -78,9 +78,10 @@ dispatch() {
     --branch "$BRANCH" --limit 1 \
     --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null) || before_id=0
 
-  # Dispatch
-  if ! gh workflow run "$WORKFLOW" --repo "$repo" --ref "$BRANCH" 2>&1; then
-    err "Failed to dispatch $WORKFLOW in $repo"
+  # Dispatch (capture output to keep URL off stdout — caller reads stdout for run ID)
+  local dispatch_err
+  if ! dispatch_err=$(gh workflow run "$WORKFLOW" --repo "$repo" --ref "$BRANCH" 2>&1); then
+    err "Failed to dispatch $WORKFLOW in $repo: $dispatch_err"
     return 1
   fi
 
