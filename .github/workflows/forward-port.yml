@@ -1,0 +1,57 @@
+name: Forward Port
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Specific repo to forward-port (e.g. greentic-types). Empty = all repos with develop.'
+        required: false
+        type: string
+        default: ''
+      tier:
+        description: 'Process a specific tier only (empty = all tiers 0-8)'
+        required: false
+        type: string
+        default: ''
+      dry-run:
+        description: 'Preview without pushing or creating PRs'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  forward-port:
+    name: Forward-port main → develop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Forward-port repos
+        env:
+          GH_TOKEN: ${{ secrets.GH_NIGHTLY_TOKEN }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TIER: ${{ inputs.tier }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: bash scripts/forward-port.sh
+
+  notify-failure:
+    name: Notify on failure
+    needs: [forward-port]
+    if: failure()
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: forward-port
+      step: forward-port
+      error: "Forward-port main → develop failed — check the run log"
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
