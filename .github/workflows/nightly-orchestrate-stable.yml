@@ -1,0 +1,57 @@
+name: Orchestrate Stable Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Process a specific tier only (empty = all tiers 0-8)'
+        required: false
+        type: string
+        default: ''
+      skip-prepare:
+        description: 'Skip the prepare phase (use existing release PRs)'
+        required: false
+        type: boolean
+        default: false
+      auto-merge-timeout:
+        description: 'Minutes to wait for PR merges per tier (0 = no waiting, require pre-merged)'
+        required: false
+        type: string
+        default: '60'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  orchestrate:
+    name: Tier-ordered stable release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Orchestrate stable release
+        env:
+          GH_TOKEN: ${{ secrets.GH_NIGHTLY_TOKEN }}
+          INPUT_TIER: ${{ inputs.tier }}
+          INPUT_SKIP_PREPARE: ${{ inputs.skip-prepare }}
+          INPUT_MERGE_TIMEOUT: ${{ inputs.auto-merge-timeout }}
+        run: bash scripts/nightly-orchestrate-stable.sh
+
+  notify-failure:
+    name: Notify on failure
+    needs: [orchestrate]
+    if: failure()
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: orchestrate-stable
+      step: orchestration
+      error: "Stable release orchestration failed — check the run log"
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
