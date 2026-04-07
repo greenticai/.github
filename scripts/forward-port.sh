@@ -135,9 +135,20 @@ forward_port_repo() {
         exit 100  # signal: up to date
       fi
 
-      git push origin develop 2>/dev/null
-      echo "  ✓ $name — merged cleanly"
-      exit 0
+      # Try direct push first; if blocked (branch protection), fall back to PR
+      if git push origin develop 2>/dev/null; then
+        echo "  ✓ $name — merged cleanly and pushed"
+        exit 0
+      else
+        echo "  ℹ $name — direct push blocked (branch protection), creating PR"
+        local branch="forward-port/main-to-develop-$(date -u '+%Y%m%d')"
+        git checkout -b "$branch" 2>/dev/null
+        git push origin "$branch" 2>/dev/null || {
+          echo "::error::$name — failed to push forward-port branch"
+          exit 1
+        }
+        exit 201  # signal: clean merge but needs PR (protected branch)
+      fi
     else
       # Merge failed — conflicts
       echo "  ⚡ $name — conflicts detected, creating PR"
@@ -160,15 +171,40 @@ forward_port_repo() {
 
   case "$exit_code" in
     0)
-      log "  ✓ $name — merged cleanly and pushed"
       ((merged_clean++)) || true
       ;;
     100)
       log "  ⊘ $name — already up to date"
       ((skipped_up_to_date++)) || true
       ;;
+    201)
+      # Clean merge but branch is protected — create PR
+      ensure_label "$repo"
+
+      local branch="forward-port/main-to-develop-$(date -u '+%Y%m%d')"
+      local pr_url
+      pr_url=$(gh pr create --repo "$repo" --base develop --head "$branch" \
+        --title "chore: forward-port main → develop" \
+        --label "$FORWARD_PORT_LABEL" \
+        --body "$(cat <<BODY
+## Forward-port: main → develop
+
+Automated forward-port of \`main\` into \`develop\`. Merge is clean (no conflicts).
+
+---
+_Automated by [forward-port](https://github.com/greenticai/.github/actions/workflows/forward-port.yml)._
+BODY
+)" 2>&1) || {
+        err "$name — forward-port PR creation failed: $pr_url"
+        ((failed++)) || true
+        return 1
+      }
+
+      log "  ✓ $name — forward-port PR: $pr_url"
+      ((merged_clean++)) || true
+      ;;
     200)
-      # Create conflict PR
+      # Conflict PR
       ensure_label "$repo"
 
       local branch="forward-port/main-to-develop-$(date -u '+%Y%m%d')"
