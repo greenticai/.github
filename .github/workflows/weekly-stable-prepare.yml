@@ -1,0 +1,59 @@
+name: Weekly Stable Prepare
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Monday 6 AM UTC
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Specific repo to prepare (e.g. greentic-types). Empty = all enabled repos.'
+        required: false
+        type: string
+        default: ''
+      tier:
+        description: 'Process a specific tier only (empty = all tiers 0-8)'
+        required: false
+        type: string
+        default: ''
+      dry-run:
+        description: 'Preview without creating branches or PRs'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  prepare:
+    name: Prepare release PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare release PRs
+        env:
+          GH_TOKEN: ${{ secrets.GH_NIGHTLY_TOKEN }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TIER: ${{ inputs.tier }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: bash scripts/weekly-stable-prepare.sh
+
+  notify-failure:
+    name: Notify on failure
+    needs: [prepare]
+    if: failure()
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: weekly-stable-prepare
+      step: preparation
+      error: "Weekly stable preparation failed — check the run log"
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
