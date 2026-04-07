@@ -24,7 +24,7 @@ tier = 0
 publishes = ["greentic-types-macros", "greentic-types"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-interfaces]
 org = "greenticai"
@@ -33,7 +33,7 @@ tier = 0
 publishes = ["greentic-interfaces", "greentic-interfaces-guest", "greentic-interfaces-wasmtime", "greentic-interfaces-host"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-telemetry]
 org = "greenticai"
@@ -42,7 +42,7 @@ tier = 0
 publishes = ["greentic-telemetry"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-i18n]
 org = "greenticai"
@@ -51,7 +51,7 @@ tier = 0
 publishes = ["greentic-i18n-lib", "greentic-i18n-translator"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.serde-yaml-gtc]
 org = "greenticai"
@@ -61,7 +61,7 @@ publishes = ["serde_yaml_gtc"]
 # No version-track: serde_yaml_gtc is at 2.5.x, separate version track.
 # Bump scripts skip repos without version-track.
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 # ─── Tier 1 — Core ──────────────────────────────────────────────
 
