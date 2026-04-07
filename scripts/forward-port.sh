@@ -120,6 +120,9 @@ forward_port_repo() {
     return 1
   fi
 
+  # Capture subshell exit code. The "|| exit_code=$?" suppresses set -e
+  # for the subshell (bash doesn't trigger errexit on commands in || chains).
+  local exit_code=0
   (
     cd "$tmpdir"
     git config user.name "github-actions[bot]"
@@ -166,8 +169,7 @@ forward_port_repo() {
 
       exit 200  # signal: needs conflict PR
     fi
-  )
-  local exit_code=$?
+  ) || exit_code=$?
 
   case "$exit_code" in
     0)
