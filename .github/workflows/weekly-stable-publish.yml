@@ -16,7 +16,7 @@ on:
         required: true
         type: string
     secrets:
-      CRATES_IO_TOKEN:
+      CARGO_REGISTRY_TOKEN:
         required: true
 
 permissions:
@@ -85,7 +85,7 @@ jobs:
 
       - name: Publish crates to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
