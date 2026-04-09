@@ -428,7 +428,7 @@ variant = "host"
 tier = 7
 publishes = []  # demo bundles, not published
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-test-flow-a]
 org = "greenticai"
