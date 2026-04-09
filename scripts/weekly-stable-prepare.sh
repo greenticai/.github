@@ -43,7 +43,8 @@ warn() { echo "::warning::$1"; }
 
 # ── Parse manifest ───────────────────────────────────────────────
 # Output: tab-separated "tier\torg\tname\tcrates\tauto_merge" lines.
-# Only repos with weekly-stable-enabled=true, non-empty publishes, not archived.
+# Only repos with weekly-stable-enabled=true, not archived.
+# Repos with empty publishes are included (tag-only flow).
 get_repos() {
   python3 -c "
 import tomllib
@@ -55,10 +56,8 @@ for name, entry in m.get('repos', {}).items():
         continue
     if not entry.get('weekly-stable-enabled', False):
         continue
-    if not entry.get('publishes', []):
-        continue
     tier = entry.get('tier', 99)
-    crates = ' '.join(entry['publishes'])
+    crates = ' '.join(entry.get('publishes', []))
     auto_merge = 'true' if entry.get('weekly-stable-auto-merge', False) else 'false'
     entries.append((tier, entry['org'], name, crates, auto_merge))
 entries.sort()
@@ -270,11 +269,12 @@ prepare_release() {
   ensure_release_label "$repo"
 
   # 10. Create PR
-  local crate_list
-  crate_list=$(echo "$crates" | tr ' ' '\n' | sed 's/^/- `/' | sed 's/$/`/')
-
   local pr_body
-  pr_body=$(cat <<BODY
+  if [[ -n "$crates" ]]; then
+    local crate_list
+    crate_list=$(echo "$crates" | tr ' ' '\n' | sed 's/^/- `/' | sed 's/$/`/')
+
+    pr_body=$(cat <<BODY
 ## Release v$next_ver
 
 **Version:** \`$current_ver\` → \`$next_ver\`
@@ -288,9 +288,25 @@ $crate_list
 $changelog
 
 ---
-_Automated by [weekly-stable-prepare](https://github.com/greenticai/.github/actions/workflows/weekly-stable-prepare.yml). Merge this PR to trigger publishing to crates.io._
+_Automated by [weekly-stable-prepare](https://github.com/greenticai/.github/actions/workflows/weekly-stable-prepare.yml). Merging creates tag \`v$next_ver\` → triggers crates.io publish._
 BODY
 )
+  else
+    pr_body=$(cat <<BODY
+## Release v$next_ver
+
+**Version:** \`$current_ver\` → \`$next_ver\`
+**Tier:** $tier
+**Type:** Tag only (no crates.io publish)
+
+### Changes since ${last_tag:-"(initial)"}
+$changelog
+
+---
+_Automated by [weekly-stable-prepare](https://github.com/greenticai/.github/actions/workflows/weekly-stable-prepare.yml). Merging creates tag \`v$next_ver\`._
+BODY
+)
+  fi
 
   local pr_url
   pr_url=$(gh pr create --repo "$repo" --base main --head "$release_branch" \

@@ -1,0 +1,64 @@
+name: Tag on Version Bump
+
+on:
+  workflow_call:
+    secrets:
+      PUSH_TOKEN:
+        required: false
+        description: "PAT to push tags with. Tag pushes from a PAT trigger downstream workflows (e.g., publish.yml). Falls back to GITHUB_TOKEN if not provided (tag is created but won't trigger other workflows)."
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  tag:
+    name: Tag if version changed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Use PAT if available so the tag push triggers downstream workflows.
+          # GITHUB_TOKEN-created events don't trigger other workflows by design.
+          token: ${{ secrets.PUSH_TOKEN || github.token }}
+
+      - name: Check version and create tag
+        id: tag
+        run: |
+          set -euo pipefail
+
+          # ── Extract version from Cargo.toml ─────────────────────
+          if grep -q '^\[workspace\.package\]' Cargo.toml; then
+            ver=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
+          else
+            ver=$(sed -n '/^\[package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
+          fi
+
+          if [ -z "$ver" ]; then
+            echo "::notice::No version found in Cargo.toml — skipping"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag="v${ver}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          # ── Idempotent: skip if tag already exists ──────────────
+          if git ls-remote --tags origin "refs/tags/${tag}" | grep -q .; then
+            echo "Tag ${tag} already exists — no version bump detected"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # ── Create and push tag ─────────────────────────────────
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "✓ Created tag ${tag} on $(git rev-parse --short HEAD)"

@@ -1,0 +1,165 @@
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      crates:
+        description: "Space-separated ordered list of crates to publish (dependency order)"
+        required: true
+        type: string
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.94.0"
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Extract version
+        id: version
+        run: |
+          set -euo pipefail
+
+          # Read version from workspace.package or package section
+          if grep -q '^\[workspace\.package\]' Cargo.toml; then
+            ver=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
+          else
+            ver=$(sed -n '/^\[package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
+          fi
+
+          if [ -z "$ver" ]; then
+            echo "::error::Could not extract version from Cargo.toml"
+            exit 1
+          fi
+
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${ver}"
+          echo "Crates: ${{ inputs.crates }}"
+
+      - name: Publish crates to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # ── Per-crate idempotency check ──────────────────────────
+          is_published() {
+            local crate="$1" version="$2"
+            local status
+            status=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "User-Agent: greentic-crates-publish" \
+              "https://crates.io/api/v1/crates/${crate}/${version}")
+            [[ "$status" == "200" ]]
+          }
+
+          # ── Propagation polling ──────────────────────────────────
+          wait_for_propagation() {
+            local crate="$1" version="$2"
+            local timeout=300  # 5 minutes
+            local interval=30
+            local elapsed=0
+
+            while [[ "$elapsed" -lt "$timeout" ]]; do
+              if is_published "$crate" "$version"; then
+                echo "  ✓ ${crate} ${version} available on crates.io (${elapsed}s)"
+                return 0
+              fi
+              echo "  ⏳ Waiting for ${crate} ${version} to propagate (${elapsed}s/${timeout}s)..."
+              sleep "$interval"
+              elapsed=$((elapsed + interval))
+            done
+
+            echo "::warning::${crate} ${version} not visible after ${timeout}s — continuing"
+            return 0  # non-fatal: index may still catch up
+          }
+
+          # ── Publish with exponential backoff ─────────────────────
+          publish_crate() {
+            local crate="$1"
+            local max_retries=3
+            local delay=10
+
+            # Skip if already published (idempotent retry)
+            if is_published "$crate" "$VERSION"; then
+              echo "✓ ${crate} ${VERSION} already on crates.io — skipping"
+              return 0
+            fi
+
+            local attempt=0
+            local output=""
+
+            while [[ "$attempt" -lt "$max_retries" ]]; do
+              attempt=$((attempt + 1))
+              echo "::group::Publishing ${crate} (attempt ${attempt}/${max_retries})"
+
+              if output=$(cargo publish -p "${crate}" --allow-dirty 2>&1); then
+                echo "$output"
+                echo "::endgroup::"
+                echo "✓ Published ${crate} ${VERSION}"
+                return 0
+              fi
+
+              echo "$output"
+              echo "::endgroup::"
+
+              # "already exists" → treat as success
+              if echo "$output" | grep -qiE "already exists|already uploaded|crate version .* is already uploaded"; then
+                echo "✓ ${crate} already published — skipping (idempotent)"
+                return 0
+              fi
+
+              # Rate-limited or transient server error → retry with backoff
+              if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
+                echo "⚠ Transient error, retrying in ${delay}s..."
+                sleep "$delay"
+                delay=$((delay * 2))
+                [[ "$delay" -gt 120 ]] && delay=120
+                continue
+              fi
+
+              # Other error → fail immediately (bad metadata, auth failure, etc.)
+              echo "::error::Failed to publish ${crate}: non-retryable error"
+              return 1
+            done
+
+            echo "::error::Failed to publish ${crate} after ${max_retries} attempts"
+            return 1
+          }
+
+          # ── Main publish loop ────────────────────────────────────
+
+          echo "Publishing crates: ${{ inputs.crates }}"
+          echo "Version: ${VERSION}"
+          echo ""
+
+          published=0
+          for crate in ${{ inputs.crates }}; do
+            publish_crate "${crate}"
+            wait_for_propagation "${crate}" "${VERSION}"
+            published=$((published + 1))
+          done
+
+          echo ""
+          echo "✓ All ${published} crate(s) published to crates.io"
