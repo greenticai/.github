@@ -1,0 +1,59 @@
+name: Notify Success
+
+on:
+  workflow_call:
+    inputs:
+      workflow-name:
+        description: "Name of the succeeded workflow (e.g., nightly-develop, orchestrate-stable)"
+        required: true
+        type: string
+      details:
+        description: "Summary of what was accomplished (e.g., published crates list)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS:
+        required: true
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Post success to Slack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build message
+        id: msg
+        env:
+          WORKFLOW_NAME: ${{ inputs.workflow-name }}
+          DETAILS: ${{ inputs.details }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          text=":white_check_mark: *${WORKFLOW_NAME}* succeeded"
+
+          if [ -n "$DETAILS" ]; then
+            text="${text}\n${DETAILS}"
+          fi
+          text="${text}\n*Run:* <${RUN_URL}|View workflow run>"
+
+          # Escape for JSON
+          text=$(echo -e "$text" | jq -Rs .)
+          echo "payload={\"text\":${text}}" >> "$GITHUB_OUTPUT"
+
+      - name: Post to Slack
+        run: |
+          set -euo pipefail
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H 'Content-type: application/json' \
+            --data '${{ steps.msg.outputs.payload }}' \
+            "${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}")
+
+          if [ "$response" -ne 200 ]; then
+            echo "::warning::Slack notification failed (HTTP ${response})"
+          else
+            echo "Slack notification sent"
+          fi

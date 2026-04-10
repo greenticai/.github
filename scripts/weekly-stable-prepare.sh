@@ -34,6 +34,7 @@ prepared=0
 skipped_no_changes=0
 skipped_existing_pr=0
 failed=0
+prepared_details=""
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -329,6 +330,7 @@ BODY
     fi
   fi
 
+  prepared_details="${prepared_details:+$prepared_details, }$name v$next_ver"
   ((prepared++)) || true
 }
 
@@ -381,5 +383,12 @@ cat >> "${GITHUB_STEP_SUMMARY:-/dev/null}" <<EOF
 
 $(if [[ "$DRY_RUN" == "true" ]]; then echo "**Dry run** — no branches or PRs were created."; fi)
 EOF
+
+# Output summary for downstream notification
+if [[ "$prepared" -gt 0 ]]; then
+  echo "summary=Created ${prepared} release PR(s): ${prepared_details}" >> "${GITHUB_OUTPUT:-/dev/null}"
+else
+  echo "summary=No release PRs created (${skipped_no_changes} unchanged, ${skipped_existing_pr} existing)" >> "${GITHUB_OUTPUT:-/dev/null}"
+fi
 
 [[ "$failed" -eq 0 ]]

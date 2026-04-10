@@ -37,6 +37,7 @@ skipped_no_branch=0
 failed=0
 halted=false
 lower_tier_published=false
+published_names=""
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -235,6 +236,10 @@ process_tier() {
     if wait_for_all "${to_wait[@]}"; then
       succeeded=$((succeeded + ${#to_wait[@]}))
       lower_tier_published=true
+      for entry in "${to_wait[@]}"; do
+        local r="${entry%%:*}"; local n="${r##*/}"
+        published_names="${published_names:+$published_names, }$n"
+      done
     else
       # Count individual outcomes
       for entry in "${to_wait[@]}"; do
@@ -246,6 +251,8 @@ process_tier() {
         if [[ "$conclusion" == "success" ]]; then
           ((succeeded++)) || true
           lower_tier_published=true
+          local n="${repo##*/}"
+          published_names="${published_names:+$published_names, }$n"
         else
           ((failed++)) || true
         fi
@@ -351,5 +358,12 @@ EOF
 #   - Rust toolchain + CodeArtifact credentials on the runner
 #   - Push access to develop (bot bypass in branch protection)
 # Deferred until the dispatch+wait pipeline is proven stable.
+
+# Output summary for downstream notification
+if [[ "$succeeded" -gt 0 ]]; then
+  echo "summary=Published ${succeeded} repo(s) to CodeArtifact: ${published_names}" >> "${GITHUB_OUTPUT:-/dev/null}"
+else
+  echo "summary=No repos published (${skipped_no_changes} unchanged, ${skipped_no_branch} no branch)" >> "${GITHUB_OUTPUT:-/dev/null}"
+fi
 
 [[ "$failed" -eq 0 ]]
