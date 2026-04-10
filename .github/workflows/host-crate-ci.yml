@@ -46,7 +46,7 @@ jobs:
   toolchain-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
       - name: Check toolchain drift
@@ -73,7 +73,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
       - uses: dtolnay/rust-toolchain@stable
@@ -87,7 +87,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
       - uses: dtolnay/rust-toolchain@stable
@@ -102,7 +102,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
       - uses: dtolnay/rust-toolchain@stable
@@ -117,7 +117,7 @@ jobs:
     if: ${{ inputs.run-semver-checks }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
       - uses: dtolnay/rust-toolchain@stable

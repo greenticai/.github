@@ -46,7 +46,7 @@ jobs:
       has-vulnerabilities: ${{ steps.check_vulns.outputs.has-vulnerabilities }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run dependency review
         id: review
@@ -117,7 +117,7 @@ jobs:
 
       - name: Checkout PR branch
         if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
@@ -191,7 +191,7 @@ jobs:
 
       - name: Upload remediation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-dependency-fix-run
           path: |
