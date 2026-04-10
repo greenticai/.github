@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           # Use PAT if available so the tag push triggers downstream workflows.
           # GITHUB_TOKEN-created events don't trigger other workflows by design.
