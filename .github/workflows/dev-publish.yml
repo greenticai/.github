@@ -23,6 +23,10 @@ on:
         description: "Add wasm32-wasip2 target for WASM component repos"
         type: boolean
         default: false
+      exclude-crates:
+        description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
+        type: string
+        default: ""
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
@@ -64,13 +68,22 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo clippy --workspace --all-targets $excludes -- -D warnings
 
       - name: build
-        run: cargo build --workspace --all-features
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo build --workspace --all-features $excludes
 
       - name: test
-        run: cargo test --workspace --all-features -- --nocapture
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo test --workspace --all-features $excludes -- --nocapture
 
   publish:
     name: Publish dev crates to CodeArtifact
