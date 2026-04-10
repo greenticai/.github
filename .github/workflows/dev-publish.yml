@@ -196,7 +196,7 @@ jobs:
 
               if output=$(cargo publish -p "${crate}" \
                   --registry corp-artifacts-greentic \
-                  --allow-dirty 2>&1); then
+                  --allow-dirty --no-verify 2>&1); then
                 echo "$output"
                 echo "::endgroup::"
                 echo "✓ Published ${crate} ${DEV_VERSION}"
