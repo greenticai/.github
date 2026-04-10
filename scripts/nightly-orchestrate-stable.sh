@@ -32,6 +32,7 @@ tiers_completed=0
 repos_published=0
 repos_skipped=0
 failed=0
+published_details=""
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -354,6 +355,9 @@ for tier in "${tier_order[@]}"; do
 
       if wait_for_publish "$repo" "$merge_sha"; then
         ((repos_published++)) || true
+        local ver
+        ver=$(get_current_version "$repo" 2>/dev/null) || ver="?"
+        published_details="${published_details:+$published_details, }${name} v${ver}"
       else
         tier_failed=true
         ((failed++)) || true
@@ -395,5 +399,12 @@ cat >> "${GITHUB_STEP_SUMMARY:-/dev/null}" <<EOF
 | Repos skipped | $repos_skipped |
 | Failed | $failed |
 EOF
+
+# Output summary for downstream notification
+if [[ "$repos_published" -gt 0 ]]; then
+  echo "summary=Published ${repos_published} repo(s) to crates.io: ${published_details}" >> "${GITHUB_OUTPUT:-/dev/null}"
+else
+  echo "summary=No repos published (${repos_skipped} skipped)" >> "${GITHUB_OUTPUT:-/dev/null}"
+fi
 
 [[ "$failed" -eq 0 ]]

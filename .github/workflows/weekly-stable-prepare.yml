@@ -31,6 +31,8 @@ jobs:
   prepare:
     name: Prepare release PRs
     runs-on: ubuntu-latest
+    outputs:
+      summary: ${{ steps.run.outputs.summary }}
     steps:
       - uses: actions/checkout@v6
 
@@ -39,12 +41,24 @@ jobs:
           python-version: '3.12'
 
       - name: Prepare release PRs
+        id: run
         env:
           GH_TOKEN: ${{ secrets.GH_NIGHTLY_TOKEN }}
           INPUT_REPO: ${{ inputs.repo }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_DRY_RUN: ${{ inputs.dry-run }}
         run: bash scripts/weekly-stable-prepare.sh
+
+  notify-success:
+    name: Notify on success
+    needs: [prepare]
+    if: success()
+    uses: ./.github/workflows/notify-success.yml
+    with:
+      workflow-name: weekly-stable-prepare
+      details: ${{ needs.prepare.outputs.summary }}
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
 
   notify-failure:
     name: Notify on failure

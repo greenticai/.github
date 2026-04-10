@@ -26,6 +26,8 @@ jobs:
   orchestrate:
     name: Tier-ordered dev publish
     runs-on: ubuntu-latest
+    outputs:
+      summary: ${{ steps.run.outputs.summary }}
     steps:
       - uses: actions/checkout@v6
 
@@ -34,11 +36,23 @@ jobs:
           python-version: '3.12'
 
       - name: Orchestrate dev publishing
+        id: run
         env:
           GH_TOKEN: ${{ secrets.GH_NIGHTLY_TOKEN }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_FORCE: ${{ inputs.force }}
         run: bash scripts/nightly-develop-orchestrate.sh
+
+  notify-success:
+    name: Notify on success
+    needs: [orchestrate]
+    if: success()
+    uses: ./.github/workflows/notify-success.yml
+    with:
+      workflow-name: nightly-develop
+      details: ${{ needs.orchestrate.outputs.summary }}
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
 
   notify-failure:
     name: Notify on failure
