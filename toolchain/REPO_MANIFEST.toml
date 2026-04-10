@@ -71,8 +71,8 @@ variant = "host"
 tier = 1
 publishes = ["greentic-config-types", "greentic-config"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-session]
 org = "greenticai"
@@ -80,8 +80,8 @@ variant = "host"
 tier = 1
 publishes = ["greentic-session"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-state]
 org = "greenticai"
@@ -89,16 +89,17 @@ variant = "host"
 tier = 1
 publishes = ["greentic-state"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-secrets]
 org = "greenticai"
 variant = "host"
 tier = 1
-publishes = []  # 17 publishable crates — populate with correct order before deploying dev-publish
+publishes = []  # application/hybrid repo — no crates.io publish, tag-only
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-component]
 org = "greenticai"
@@ -106,8 +107,8 @@ variant = "wasm"
 tier = 1
 publishes = ["greentic-component-manifest", "greentic-component", "greentic-component-store", "greentic-component-runtime"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-distributor-client]
 org = "greenticai"
@@ -115,8 +116,8 @@ variant = "host"
 tier = 1
 publishes = ["greentic-distributor-client", "greentic-distributor-dev"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-qa]
 org = "greenticai"
@@ -124,8 +125,8 @@ variant = "wasm"
 tier = 1
 publishes = ["qa-spec", "component-qa", "greentic-qa-lib"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 # ─── Tier 2 — Flow + OAuth ──────────────────────────────────────
 
