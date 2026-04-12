@@ -549,3 +549,51 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 archived = true
+
+[repos.greentic-sorla]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-sorla-providers]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-flow-builder]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-adaptive-card-mcp]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-cap]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-dw-providers]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
