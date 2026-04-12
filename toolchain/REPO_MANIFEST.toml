@@ -132,9 +132,10 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "host"
 tier = 1
-publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+publishes = ["greentic-cap-types", "greentic-cap-profile", "greentic-cap-resolver", "greentic-cap-schema", "greentic-cap-core", "greentic-cap"]
+version-track = { from = "0.5", to = "0.6" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 # ─── Tier 2 — Flow + OAuth ──────────────────────────────────────
 
@@ -144,8 +145,8 @@ variant = "host"
 tier = 2
 publishes = ["greentic-flow"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-oauth]
 org = "greenticai"
@@ -153,16 +154,17 @@ variant = "wasm"
 tier = 2
 publishes = ["greentic-oauth-core", "greentic-oauth-broker", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-sorla]
 org = "greenticai"
 variant = "host"
 tier = 2
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-sorla"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 # ─── Tier 3 — Packaging ─────────────────────────────────────────
 
@@ -172,24 +174,26 @@ variant = "wasm"
 tier = 3
 publishes = ["greentic-pack-lib", "pack_component", "pack_component_template", "greentic-pack"]
 version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-bundle]
 org = "greenticai"
 variant = "host"
 tier = 3
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-bundle-reader", "greentic-bundle"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-cards2pack]
 org = "greenticai"
 variant = "host"
 tier = 3
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-cards2pack"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 # ─── Tier 4 — Runtime ───────────────────────────────────────────
 
