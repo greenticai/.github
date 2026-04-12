@@ -128,6 +128,14 @@ version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
+[repos.greentic-cap]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
 # ─── Tier 2 — Flow + OAuth ──────────────────────────────────────
 
 [repos.greentic-flow]
@@ -146,6 +154,14 @@ tier = 2
 publishes = ["greentic-oauth-core", "greentic-oauth-broker", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = false
+weekly-stable-enabled = false
+
+[repos.greentic-sorla]
+org = "greenticai"
+variant = "host"
+tier = 2
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 
 # ─── Tier 3 — Packaging ─────────────────────────────────────────
@@ -262,6 +278,22 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-dw-providers]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # WASM provider components
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-sorla-providers]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []  # SoRLa provider family
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 
@@ -530,6 +562,22 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 
+[repos.greentic-flow-builder]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
+[repos.greentic-adaptive-card-mcp]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+
 # ─── Archived (read-only, skipped by all scripts) ───────────────
 
 [repos.greentic-messaging]
@@ -549,51 +597,3 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 archived = true
-
-[repos.greentic-sorla]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-sorla-providers]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-flow-builder]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-adaptive-card-mcp]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-cap]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-dw-providers]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
