@@ -152,7 +152,7 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "wasm"
 tier = 2
-publishes = ["greentic-oauth-core", "greentic-oauth-broker", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
+publishes = ["greentic-oauth-core", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
