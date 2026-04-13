@@ -266,7 +266,7 @@ weekly-stable-enabled = false
 org = "greenticai"
 variant = "host"
 tier = 4
-publishes = ["greentic-mcp"]
+publishes = ["greentic-mcp-exec", "greentic-mcp"]
 exclude-crates = ["greentic-mcp-adapter"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
