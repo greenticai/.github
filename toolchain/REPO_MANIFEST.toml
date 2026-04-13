@@ -322,41 +322,46 @@ weekly-stable-enabled = false
 org = "greenticai"
 variant = "host"
 tier = 5
-publishes = []  # CLI binary — publish handled separately
-version-track = { from = "0.9", to = "0.10" }
-weekly-stable-enabled = false
+publishes = ["gtc"]
+version-track = { from = "1.0", to = "1.1" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-dev]
 org = "greenticai"
 variant = "host"
 tier = 5
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-dev"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-setup]
 org = "greenticai"
 variant = "host"
 tier = 5
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-setup"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-provision]
 org = "greenticai"
 variant = "host"
 tier = 5
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-provision-core", "greentic-provision"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-deployer]
 org = "greenticai"
 variant = "host"
 tier = 5
-publishes = []  # populate before deploying dev-publish
+publishes = ["greentic-deployer"]
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 # ─── Tier 6 — Components (WASM, no publish) ─────────────────────
 
