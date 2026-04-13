@@ -88,6 +88,7 @@ org = "greenticai"
 variant = "host"
 tier = 1
 publishes = ["greentic-state"]
+exclude-crates = ["state-provider-redis", "state-provider-memory"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -153,6 +154,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 2
 publishes = ["greentic-oauth-core", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
+exclude-crates = ["oidc-ingress", "oidc-provider-runtime"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -173,6 +175,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 3
 publishes = ["greentic-pack-lib", "pack_component", "pack_component_template", "greentic-pack"]
+exclude-crates = ["pack_component"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -191,6 +194,7 @@ org = "greenticai"
 variant = "host"
 tier = 3
 publishes = ["greentic-cards2pack"]
+setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow --force"
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
