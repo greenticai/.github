@@ -68,18 +68,34 @@ for tier, org, name, crates, auto_merge in entries:
 }
 
 # ── Tag detection ────────────────────────────────────────────────
-# Returns the latest stable release tag (v*.*.* without pre-release suffix).
-# Handles repos with no tags (returns empty string).
+# Returns the latest stable release tag (v*.*.* without pre-release suffix)
+# that is REACHABLE from main. Tags on abandoned side-branches must be
+# skipped — they can carry higher version numbers than main but are not
+# ancestors of it, so comparing against them produces a nonsense changelog
+# and a mis-computed next version.
+#
+# Reachability check uses the compare API's status field:
+#   "ahead"     → main is strictly ahead of tag (tag is an ancestor)
+#   "identical" → main is at the tag
+#   "behind" / "diverged" → tag is NOT an ancestor of main → skip
+#
+# Returns empty string if the repo has no tags or no reachable stable tag.
 get_last_stable_tag() {
   local repo="$1"  # org/name format
+  local tag status
 
-  # Fetch tags, filter to stable v*.*.* only, sort by version, take latest.
-  # Exclude pre-release tags like v0.4.56-dev.141.
-  gh api "repos/$repo/tags" --paginate --jq '.[].name' 2>/dev/null \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V \
-    | tail -1 \
-    || true
+  while IFS= read -r tag; do
+    [[ -z "$tag" ]] && continue
+    status=$(gh api "repos/$repo/compare/$tag...main" --jq '.status' 2>/dev/null || echo "")
+    if [[ "$status" == "ahead" || "$status" == "identical" ]]; then
+      echo "$tag"
+      return 0
+    fi
+  done < <(
+    gh api "repos/$repo/tags" --paginate --jq '.[].name' 2>/dev/null \
+      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+      | sort -Vr
+  )
 }
 
 # ── Version reading ──────────────────────────────────────────────
@@ -186,6 +202,21 @@ prepare_release() {
   next_ver=$(bump_patch "$current_ver")
   local release_branch="release/v$next_ver"
 
+  # Defense-in-depth: computed next version must be strictly greater than
+  # the last reachable stable tag. With the reachability filter above this
+  # invariant should already hold, but a manually-reverted Cargo.toml on
+  # main would otherwise produce a regressing PR — fail loudly instead.
+  if [[ -n "$last_tag" ]]; then
+    local last_ver="${last_tag#v}"
+    local highest
+    highest=$(printf '%s\n%s\n' "$last_ver" "$next_ver" | sort -V | tail -1)
+    if [[ "$next_ver" == "$last_ver" || "$highest" != "$next_ver" ]]; then
+      err "$name — computed next version v$next_ver is not ahead of last stable v$last_ver (Cargo.toml may be out of sync with tags)"
+      ((failed++)) || true
+      return 1
+    fi
+  fi
+
   # ── Dry run stops here ──
   if [[ "$DRY_RUN" == "true" ]]; then
     log "  [dry-run] $name — would create PR: v$current_ver → v$next_ver (crates: $crates)"
@@ -201,11 +232,23 @@ prepare_release() {
     return 1
   }
 
-  # Create branch via API (idempotent — reuse if exists from partial run)
-  if ! gh api "repos/$repo/git/refs" -X POST \
+  # Create branch via API. Idempotent: if the ref already exists from a
+  # partial run we reuse it. But we must NOT blindly treat every failure
+  # as "already exists" — e.g. a directory/file ref collision (a bare
+  # `release` branch shadowing `release/vX.Y.Z`) also fails creation, and
+  # swallowing that error misreports the cause and then dies later at
+  # `git clone` with a generic "failed to clone" message.
+  local create_out
+  if ! create_out=$(gh api "repos/$repo/git/refs" -X POST \
       -f "ref=refs/heads/$release_branch" \
-      -f "sha=$main_sha" --silent 2>/dev/null; then
-    warn "$name — branch $release_branch already exists, reusing"
+      -f "sha=$main_sha" 2>&1); then
+    if gh api "repos/$repo/git/ref/heads/$release_branch" >/dev/null 2>&1; then
+      warn "$name — branch $release_branch already exists, reusing"
+    else
+      err "$name — failed to create branch $release_branch: $create_out"
+      ((failed++)) || true
+      return 1
+    fi
   fi
 
   # 7. Clone the release branch, bump version, commit, push
