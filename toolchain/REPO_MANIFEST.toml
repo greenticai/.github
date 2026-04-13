@@ -587,6 +587,14 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 
+[repos.telco-x]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
 [repos.greentic-flow-builder]
 org = "greentic-biz"
 variant = "host"
