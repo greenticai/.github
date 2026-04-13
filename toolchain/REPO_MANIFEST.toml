@@ -285,7 +285,7 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "host"
 tier = 4
-publishes = ["dwbase-core", "dwbase-metrics", "dwbase-pack-runner", "dwbase-wit-guest", "dwbase-engine", "dwbase-security", "dwbase-storage-sled", "dwbase-stream-local", "dwbase-vector-hnsw", "dwbase-swarm", "dwbase-wit-host", "dwbase-embedder-dummy", "dwbase-swarm-nats", "dwbase-bench", "dwbase-cli", "dwbase-node"]
+publishes = ["dwbase-core", "dwbase-metrics", "dwbase-engine", "dwbase-storage-sled", "dwbase-vector-hnsw", "dwbase-stream-local", "dwbase-security", "dwbase-embedder-dummy", "dwbase-swarm", "dwbase-swarm-nats", "dwbase-node", "dwbase-cli", "dwbase-pack-runner"]
 exclude-crates = ["component-dwbase"]
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
