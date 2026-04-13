@@ -371,7 +371,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-deployer]
@@ -379,7 +380,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-fast2flow]
@@ -387,7 +389,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-flow2flow]
@@ -395,7 +398,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-llm-openai]
@@ -403,7 +407,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-oauth-card]
@@ -411,7 +416,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-script-rhai]
@@ -419,7 +425,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.component-templates]
@@ -427,7 +434,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.components-public]
@@ -435,7 +443,8 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 # ─── Tier 7 — Extensions / Testing ──────────────────────────────
