@@ -455,6 +455,7 @@ variant = "host"
 tier = 7
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-conformance]
@@ -463,6 +464,7 @@ variant = "host"
 tier = 7
 publishes = []  # test suites, not published
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-integration]
@@ -471,6 +473,7 @@ variant = "host"
 tier = 7
 publishes = []  # test harness, not published
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-perf]
@@ -479,6 +482,7 @@ variant = "host"
 tier = 7
 publishes = []  # perf tests, not published
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-redbutton]
@@ -487,6 +491,7 @@ variant = "host"
 tier = 7
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-demo]
@@ -504,6 +509,7 @@ variant = "host"
 tier = 7
 publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-test-flow-b]
@@ -512,6 +518,7 @@ variant = "host"
 tier = 7
 publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-test-types]
@@ -520,6 +527,7 @@ variant = "host"
 tier = 7
 publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 # ─── Tier 8 — Business (greentic-biz org) ───────────────────────
