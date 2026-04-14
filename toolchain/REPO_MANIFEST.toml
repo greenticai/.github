@@ -538,6 +538,7 @@ variant = "wasm"
 tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-fast2flow]
@@ -546,6 +547,7 @@ variant = "wasm"
 tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-card]
@@ -554,6 +556,7 @@ variant = "wasm"
 tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.commercial-components]
@@ -562,30 +565,7 @@ variant = "wasm"
 tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-distributor]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-repo]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-
-[repos.greentic-store]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.customers-tools]
@@ -594,15 +574,10 @@ variant = "host"
 tier = 8
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
-[repos.zain-x]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+# zain-x was renamed to telco-x on GitHub (redirect still works)
 
 [repos.telco-x]
 org = "greentic-biz"
@@ -610,6 +585,7 @@ variant = "host"
 tier = 8
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-flow-builder]
@@ -618,6 +594,7 @@ variant = "host"
 tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-adaptive-card-mcp]
@@ -626,9 +603,37 @@ variant = "host"
 tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 # ─── Archived (read-only, skipped by all scripts) ───────────────
+
+[repos.greentic-distributor]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
+
+[repos.greentic-repo]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
+
+[repos.greentic-store]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
 
 [repos.greentic-messaging]
 org = "greenticai"
