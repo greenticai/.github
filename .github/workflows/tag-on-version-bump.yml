@@ -1,11 +1,7 @@
 name: Tag on Version Bump
 
 on:
-  workflow_call:
-    secrets:
-      PUSH_TOKEN:
-        required: false
-        description: "PAT to push tags with. Tag pushes from a PAT trigger downstream workflows (e.g., publish.yml). Falls back to GITHUB_TOKEN if not provided (tag is created but won't trigger other workflows)."
+  workflow_call: {}
 
 permissions:
   contents: write
@@ -18,12 +14,19 @@ jobs:
     name: Tag if version changed
     runs-on: ubuntu-latest
     steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # Use PAT if available so the tag push triggers downstream workflows.
+          # Use App token so the tag push triggers downstream workflows.
           # GITHUB_TOKEN-created events don't trigger other workflows by design.
-          token: ${{ secrets.PUSH_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Check version and create tag
         id: tag
@@ -55,8 +58,8 @@ jobs:
           fi
 
           # ── Create and push tag ─────────────────────────────────
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "greentic-ci[bot]"
+          git config user.email "3383573+greentic-ci[bot]@users.noreply.github.com"
           git tag -a "${tag}" -m "Release ${tag}"
           git push origin "${tag}"
 

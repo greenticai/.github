@@ -16,9 +16,6 @@ on:
         type: boolean
         default: false
     secrets:
-      GH_PAT:
-        description: "Personal access token (optional, falls back to GITHUB_TOKEN)"
-        required: false
       OPENAI_API_KEY:
         description: "OpenAI API key for Codex remediation"
         required: false
@@ -38,6 +35,13 @@ jobs:
       pull-requests: write
       security-events: read
     steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+
       - name: Check Codex availability
         id: codex_available
         shell: bash
@@ -58,7 +62,7 @@ jobs:
         id: loop_guard
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           COMMIT_MSG=$(gh api \
@@ -77,13 +81,13 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
           fetch-depth: 0
-          token: ${{ secrets.GH_PAT || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Fetch open security alerts
         if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
         id: alerts
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
           MAX_ALERTS: ${{ inputs.max_alerts }}
@@ -214,8 +218,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "greentic-ci[bot]"
+          git config user.email "3383573+greentic-ci[bot]@users.noreply.github.com"
 
           git add -u
           git commit -m "chore(security): codex remediation for security alerts" || echo "No changes to commit"
@@ -224,7 +228,7 @@ jobs:
       - name: Post Codex Review
         if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && steps.alerts.outputs.count != '0' && github.event.pull_request
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
