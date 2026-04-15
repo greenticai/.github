@@ -162,6 +162,11 @@ track_skipped() { changes_skipped+=("$1"); ((skipped++)) || true; }
 GIT_NAME="${GIT_AUTHOR_NAME:-github-actions[bot]}"
 GIT_EMAIL="${GIT_AUTHOR_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
 
+# ── Dependency-graph probe state ─────────────────────────────────
+# Cached result of check_dependency_graph_state() so we only hit the API once.
+# Values: enabled | disabled | unknown | "" (not yet probed)
+DEPENDENCY_GRAPH_STATE=""
+
 # ── Resolve REPO_PATH (mode-dependent) ───────────────────────────
 # REMOTE_TMPDIR is set only in --remote mode so the cleanup trap can rm it.
 REMOTE_TMPDIR=""
@@ -471,10 +476,67 @@ inject_msrv() {
 }
 
 # ══════════════════════════════════════════════════════════════════
+# Dependency-graph probe
+# ──────────────────────────────────────────────────────────────────
+# dependency-review.yml only works if GitHub's dependency graph is enabled
+# on the repo. Public repos have it on by default; private repos need GHAS
+# with the dependency-graph feature explicitly enabled. Adding the workflow
+# to a repo without dependency-graph produces a permanent red check on
+# every PR ("Dependency review is not supported on this repository") — so
+# we probe once and skip the workflow when it would only ever fail.
+#
+# Rules:
+#   public repo                                       → enabled
+#   private + .security_and_analysis.dependency_graph.status == "enabled"
+#                                                     → enabled
+#   private + anything else (null sa, missing key)    → disabled
+#   probe failure / no gh / auth error                → unknown (fail open)
+# ══════════════════════════════════════════════════════════════════
+check_dependency_graph_state() {
+  [[ -n "$DEPENDENCY_GRAPH_STATE" ]] && return 0
+
+  if ! command -v gh >/dev/null 2>&1; then
+    DEPENDENCY_GRAPH_STATE="unknown"
+    return 0
+  fi
+
+  local probe
+  if ! probe=$(gh api "repos/$ORG/$REPO_NAME" \
+      --jq '[(.private | tostring), (.security_and_analysis.dependency_graph.status // "")] | @tsv' \
+      2>/dev/null); then
+    DEPENDENCY_GRAPH_STATE="unknown"
+    return 0
+  fi
+
+  local is_private="${probe%$'\t'*}"
+  local dep_status="${probe#*$'\t'}"
+
+  if [[ "$is_private" == "false" ]]; then
+    # Public repos always have dependency graph on; the API doesn't
+    # expose an overridable key for them.
+    DEPENDENCY_GRAPH_STATE="enabled"
+  elif [[ "$dep_status" == "enabled" ]]; then
+    DEPENDENCY_GRAPH_STATE="enabled"
+  else
+    DEPENDENCY_GRAPH_STATE="disabled"
+  fi
+  return 0
+}
+
+# ══════════════════════════════════════════════════════════════════
 # Step 5: Standard workflow files
 # ══════════════════════════════════════════════════════════════════
 create_workflows() {
   log_section "Step 5: Workflows"
+
+  # Probe dependency-graph state so we can skip dependency-review.yml
+  # when it would only ever produce a red check.
+  check_dependency_graph_state
+  case "$DEPENDENCY_GRAPH_STATE" in
+    enabled)  log_info "Dependency graph: ${GREEN}enabled${RESET}" ;;
+    disabled) log_info "Dependency graph: ${YELLOW}disabled${RESET} — will skip dependency-review.yml" ;;
+    unknown)  log_info "Dependency graph: ${DIM}unknown${RESET} (probe failed) — will attempt dependency-review.yml" ;;
+  esac
 
   local wf_dir="$REPO_PATH/.github/workflows"
   mkdir -p "$wf_dir"
@@ -536,7 +598,19 @@ EOF
 )"
 
   # ── dependency-review.yml ──
-  write_workflow "dependency-review.yml" "$(cat <<'EOF'
+  # Skip when the repo's dependency graph is disabled — the workflow would
+  # otherwise fail on every PR with "Dependency review is not supported on
+  # this repository" until GHAS is enabled.
+  if [[ "$DEPENDENCY_GRAPH_STATE" == "disabled" ]]; then
+    local dep_review_target="$REPO_PATH/.github/workflows/dependency-review.yml"
+    if [[ -f "$dep_review_target" ]]; then
+      log_skip "dependency-review.yml — present but dependency graph is disabled on $ORG/$REPO_NAME (enable GHAS or remove the file)"
+    else
+      log_skip "dependency-review.yml — skipped (dependency graph disabled on $ORG/$REPO_NAME)"
+    fi
+    track_skipped "dependency-review.yml (dependency graph disabled)"
+  else
+    write_workflow "dependency-review.yml" "$(cat <<'EOF'
 name: Dependency Review
 on:
   pull_request:
@@ -555,6 +629,7 @@ jobs:
     secrets: inherit
 EOF
 )"
+  fi
 
   # ── codex-security-fix.yml ──
   write_workflow "codex-security-fix.yml" "$(cat <<'EOF'
