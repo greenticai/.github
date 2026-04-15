@@ -1,0 +1,125 @@
+name: Onboard Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Target repo name (e.g. greentic-types)'
+        required: true
+        type: string
+      org:
+        description: 'GitHub org'
+        required: false
+        type: choice
+        options:
+          - greenticai
+          - greentic-biz
+        default: greenticai
+      variant:
+        description: 'Toolchain variant (leave blank to auto-detect)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - host
+          - wasm
+        default: ''
+      branch-rename:
+        description: 'Rename default branch master → main'
+        required: false
+        type: boolean
+        default: false
+      semver-checks:
+        description: 'Enable run-semver-checks in ci.yml'
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: 'Overwrite existing workflow files'
+        required: false
+        type: boolean
+        default: false
+      skip-fmt:
+        description: 'Skip cargo fmt (fmt is best-effort anyway)'
+        required: false
+        type: boolean
+        default: false
+      skip-msrv:
+        description: 'Skip adding rust-version to Cargo.toml'
+        required: false
+        type: boolean
+        default: false
+      skip-manifest:
+        description: 'Skip REPO_MANIFEST.toml registration PR'
+        required: false
+        type: boolean
+        default: false
+      dry-run:
+        description: 'Preview without making changes or opening PRs'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  onboard:
+    name: Onboard ${{ inputs.repo }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Mint GitHub App token (org-wide)
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Run onboard-repo.sh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_ORG: ${{ inputs.org }}
+          INPUT_VARIANT: ${{ inputs.variant }}
+          INPUT_BRANCH_RENAME: ${{ inputs.branch-rename }}
+          INPUT_SEMVER_CHECKS: ${{ inputs.semver-checks }}
+          INPUT_FORCE: ${{ inputs.force }}
+          INPUT_SKIP_FMT: ${{ inputs.skip-fmt }}
+          INPUT_SKIP_MSRV: ${{ inputs.skip-msrv }}
+          INPUT_SKIP_MANIFEST: ${{ inputs.skip-manifest }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          args=( "$INPUT_REPO" --remote --org "$INPUT_ORG" )
+          [[ -n "$INPUT_VARIANT" ]]              && args+=( --variant "$INPUT_VARIANT" )
+          [[ "$INPUT_BRANCH_RENAME" == "true" ]] && args+=( --branch-rename )
+          [[ "$INPUT_SEMVER_CHECKS" == "true" ]] && args+=( --semver-checks )
+          [[ "$INPUT_FORCE" == "true" ]]         && args+=( --force )
+          [[ "$INPUT_SKIP_FMT" == "true" ]]      && args+=( --skip-fmt )
+          [[ "$INPUT_SKIP_MSRV" == "true" ]]     && args+=( --skip-msrv )
+          [[ "$INPUT_SKIP_MANIFEST" == "true" ]] && args+=( --skip-manifest )
+          [[ "$INPUT_DRY_RUN" == "true" ]]       && args+=( --dry-run )
+          bash scripts/onboard-repo.sh "${args[@]}"
+
+  notify-failure:
+    name: Notify on failure
+    needs: [onboard]
+    if: failure()
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: onboard-repo
+      repo: ${{ inputs.repo }}
+      step: onboard
+      error: "Onboarding ${{ inputs.repo }} failed — check the run log"
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
