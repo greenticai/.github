@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Mint GitHub App token
         id: app-token
+        # continue-on-error: App may not be installed in all orgs (e.g. greentic-biz).
+        # Falls back to GITHUB_TOKEN — tag is still created but won't trigger downstream workflows.
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
@@ -26,7 +29,8 @@ jobs:
         with:
           # Use App token so the tag push triggers downstream workflows.
           # GITHUB_TOKEN-created events don't trigger other workflows by design.
-          token: ${{ steps.app-token.outputs.token }}
+          # Falls back to GITHUB_TOKEN when App token is unavailable.
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Check version and create tag
         id: tag
