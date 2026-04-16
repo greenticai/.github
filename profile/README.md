@@ -1,3 +1,5 @@
+<!-- AUTO-GENERATED from greenticai/greentic@4d9ff63 — do not edit directly -->
+
 # Greentic — The Digital Workers OS
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
@@ -17,7 +19,7 @@ Greentic is the operating system for digital workers: deterministic, governed, m
 
 This is the kind of result Greentic is built for: a real digital worker that can receive requests, guide a user, create tickets, check status, escalate urgent issues, and operate consistently across channels.
 
-![IT Helpdesk Digital Worker](greentic_readme_assets/helpdesk-webchat.png)
+![IT Helpdesk Digital Worker](https://raw.githubusercontent.com/greenticai/greentic/main/greentic_readme_assets/helpdesk-webchat.png)
 
 After installing Greentic, you only need **three steps** to get a working digital worker running.
 
@@ -33,7 +35,7 @@ gtc wizard --answers https://github.com/greenticai/greentic-demo/releases/latest
 gtc setup ./helpdesk-itsm-demo-bundle --answers https://github.com/greenticai/greentic-demo/releases/latest/download/helpdesk-itsm-setup-answers.json
 ```
 
-![Greentic Setup Wizard](greentic_readme_assets/helpdesk-setup.png)
+![Greentic Setup Wizard](https://raw.githubusercontent.com/greenticai/greentic/main/greentic_readme_assets/helpdesk-setup.png)
 
 ## 3) Start using your digital worker
 
@@ -51,7 +53,7 @@ Your digital worker can then be used in:
 - Telegram
 - and more
 
-![IT Helpdesk on Telegram](greentic_readme_assets/helpdesk-telegram.png)
+![IT Helpdesk on Telegram](https://raw.githubusercontent.com/greenticai/greentic/main/greentic_readme_assets/helpdesk-telegram.png)
 
 ---
 
@@ -80,7 +82,7 @@ The goal is simple:
 > describe the business outcome you want, and generate the starting digital worker in seconds.
 
 Embedded demo asset included in this package:
-[![Watch on YouTube](greentic_readme_assets/creation-a-digital-coo-in-seconds-cover.jpg)](https://youtu.be/js0yon1OlVU)
+[![Watch on YouTube](https://raw.githubusercontent.com/greenticai/greentic/main/greentic_readme_assets/creation-a-digital-coo-in-seconds-cover.jpg)](https://youtu.be/js0yon1OlVU)
 
 ---
 
