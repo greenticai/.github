@@ -218,7 +218,7 @@ tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-events-providers]
 org = "greenticai"
@@ -227,7 +227,7 @@ tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.events-provider-codex]
 org = "greenticai"
@@ -236,7 +236,7 @@ tier = 4
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-start]
 org = "greenticai"
@@ -264,7 +264,7 @@ tier = 4
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-mcp]
 org = "greenticai"
@@ -311,7 +311,7 @@ tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-sorla-providers]
 org = "greenticai"
@@ -320,7 +320,7 @@ tier = 4
 publishes = []  # SoRLa provider family
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 # ─── Tier 5 — CLI / Tooling ─────────────────────────────────────
 
@@ -379,7 +379,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-deployer]
 org = "greenticai"
@@ -388,7 +388,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-fast2flow]
 org = "greenticai"
@@ -397,7 +397,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-flow2flow]
 org = "greenticai"
@@ -406,7 +406,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-llm-openai]
 org = "greenticai"
@@ -415,7 +415,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-oauth-card]
 org = "greenticai"
@@ -424,7 +424,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-script-rhai]
 org = "greenticai"
@@ -433,7 +433,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.component-templates]
 org = "greenticai"
@@ -442,7 +442,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.components-public]
 org = "greenticai"
@@ -451,7 +451,7 @@ tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 # ─── Tier 7 — Extensions / Testing ──────────────────────────────
 
@@ -462,7 +462,7 @@ tier = 7
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-conformance]
 org = "greenticai"
@@ -471,7 +471,7 @@ tier = 7
 publishes = []  # test suites, not published
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-integration]
 org = "greenticai"
@@ -480,7 +480,7 @@ tier = 7
 publishes = []  # test harness, not published
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-perf]
 org = "greenticai"
@@ -489,7 +489,7 @@ tier = 7
 publishes = []  # perf tests, not published
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-redbutton]
 org = "greenticai"
@@ -498,7 +498,7 @@ tier = 7
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-demo]
 org = "greenticai"
@@ -516,7 +516,7 @@ tier = 7
 publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-test-flow-b]
 org = "greenticai"
@@ -525,7 +525,7 @@ tier = 7
 publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-test-types]
 org = "greenticai"
@@ -534,7 +534,7 @@ tier = 7
 publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 # ─── Tier 8 — Business (greentic-biz org) ───────────────────────
 
@@ -545,7 +545,7 @@ tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-fast2flow]
 org = "greentic-biz"
@@ -554,7 +554,7 @@ tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-card]
 org = "greentic-biz"
@@ -563,7 +563,7 @@ tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.commercial-components]
 org = "greentic-biz"
@@ -572,7 +572,7 @@ tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.customers-tools]
 org = "greentic-biz"
@@ -581,7 +581,7 @@ tier = 8
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 # zain-x was renamed to telco-x on GitHub (redirect still works)
 
@@ -592,7 +592,7 @@ tier = 8
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-flow-builder]
 org = "greentic-biz"
@@ -601,7 +601,7 @@ tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 [repos.greentic-adaptive-card-mcp]
 org = "greentic-biz"
@@ -610,7 +610,7 @@ tier = 8
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
 
 # ─── Archived (read-only, skipped by all scripts) ───────────────
 
@@ -666,4 +666,4 @@ tier = 8
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
-weekly-stable-enabled = false
+weekly-stable-enabled = true
