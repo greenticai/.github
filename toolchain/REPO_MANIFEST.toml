@@ -217,6 +217,7 @@ variant = "wasm"
 tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-events-providers]
@@ -225,6 +226,7 @@ variant = "wasm"
 tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.events-provider-codex]
@@ -233,6 +235,7 @@ variant = "host"
 tier = 4
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-start]
@@ -260,6 +263,7 @@ variant = "host"
 tier = 4
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-mcp]
@@ -306,6 +310,7 @@ variant = "host"
 tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 [repos.greentic-sorla-providers]
@@ -314,6 +319,7 @@ variant = "host"
 tier = 4
 publishes = []  # SoRLa provider family
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 
 # ─── Tier 5 — CLI / Tooling ─────────────────────────────────────
@@ -659,4 +665,5 @@ variant = "host"
 tier = 8
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
