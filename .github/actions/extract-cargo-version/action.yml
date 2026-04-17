@@ -1,0 +1,76 @@
+name: "Extract Cargo.toml Version"
+description: "Reads the package version from a Cargo.toml file ([workspace.package] first, then [package])."
+
+inputs:
+  path:
+    description: "Path to Cargo.toml relative to the workspace root"
+    required: false
+    default: "Cargo.toml"
+  required:
+    description: "If 'true' (default), fail when no version is found. If 'false', exit 0 with found=false."
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: "Extracted version string, or empty when not found and required=false"
+    value: ${{ steps.extract.outputs.version }}
+  found:
+    description: "'true' if a version was extracted, else 'false'"
+    value: ${{ steps.extract.outputs.found }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: extract
+      shell: bash
+      env:
+        CARGO_TOML_PATH: ${{ inputs.path }}
+        REQUIRED: ${{ inputs.required }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import os, pathlib, sys
+        try:
+            import tomllib  # Python 3.11+
+        except ModuleNotFoundError:
+            import tomli as tomllib
+
+        path = pathlib.Path(os.environ["CARGO_TOML_PATH"])
+        required = os.environ.get("REQUIRED", "true").strip().lower() == "true"
+        out_path = os.environ.get("GITHUB_OUTPUT")
+
+        def write_output(version: str, found: bool) -> None:
+            if not out_path:
+                return
+            with open(out_path, "a", encoding="utf-8") as f:
+                f.write(f"version={version}\n")
+                f.write(f"found={'true' if found else 'false'}\n")
+
+        if not path.exists():
+            if required:
+                print(f"::error::Cargo.toml not found: {path}", file=sys.stderr)
+                sys.exit(1)
+            write_output("", False)
+            sys.exit(0)
+
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"::error::Failed to parse {path}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        ws = data.get("workspace", {}).get("package", {})
+        pkg = data.get("package", {})
+        version = ws.get("version") or pkg.get("version")
+
+        if not version:
+            if required:
+                print(f"::error::No version in {path} ([workspace.package] or [package])", file=sys.stderr)
+                sys.exit(1)
+            write_output("", False)
+            sys.exit(0)
+
+        print(f"Version: {version}")
+        write_output(str(version), True)
+        PY

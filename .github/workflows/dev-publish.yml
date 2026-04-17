@@ -140,22 +140,16 @@ jobs:
         if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
 
+      - name: Extract base version
+        id: base
+        uses: greenticai/.github/.github/actions/extract-cargo-version@main
+
       - name: Stamp dev version
         id: version
+        env:
+          BASE: ${{ steps.base.outputs.version }}
         run: |
           set -euo pipefail
-
-          # Extract base version from workspace.package or package section
-          if grep -q '^\[workspace\.package\]' Cargo.toml; then
-            base=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
-          else
-            base=$(sed -n '/^\[package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
-          fi
-
-          if [ -z "$base" ]; then
-            echo "::error::Could not extract base version from Cargo.toml"
-            exit 1
-          fi
 
           # Use {major}.{minor}.{GITHUB_RUN_ID} — a normal (non-pre-release)
           # version. Cargo's semver crate has strict pre-release matching rules
@@ -163,16 +157,16 @@ jobs:
           # ">=0.4.0-0, <0.5.0-0" (requires same M.m.p on the comparator).
           # Normal versions match all range specs and pass cargo package
           # dep validation against crates.io.
-          major_minor="${base%.*}"
+          major_minor="${BASE%.*}"
           dev="${major_minor}.${GITHUB_RUN_ID}"
-          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
           echo "dev=${dev}" >> "$GITHUB_OUTPUT"
-          echo "Stamping version: ${base} → ${dev}"
+          echo "Stamping version: ${BASE} → ${dev}"
 
           # Stamp all Cargo.toml files (skip target/ build artifacts)
           find . -name Cargo.toml -not -path './target/*' -print0 | while IFS= read -r -d '' f; do
-            if grep -q "^version = \"${base}\"" "$f"; then
-              sed -i "s/^version = \"${base}\"/version = \"${dev}\"/" "$f"
+            if grep -q "^version = \"${BASE}\"" "$f"; then
+              sed -i "s/^version = \"${BASE}\"/version = \"${dev}\"/" "$f"
               echo "  stamped ${f}"
             fi
           done
