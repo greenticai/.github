@@ -44,23 +44,11 @@ jobs:
 
       - name: Extract version
         id: version
+        uses: greenticai/.github/.github/actions/extract-cargo-version@main
+
+      - name: Log inputs
         run: |
-          set -euo pipefail
-
-          # Read version from workspace.package or package section
-          if grep -q '^\[workspace\.package\]' Cargo.toml; then
-            ver=$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
-          else
-            ver=$(sed -n '/^\[package\]/,/^\[/{ s/^version *= *"\([^"]*\)".*/\1/p; }' Cargo.toml | head -1)
-          fi
-
-          if [ -z "$ver" ]; then
-            echo "::error::Could not extract version from Cargo.toml"
-            exit 1
-          fi
-
-          echo "version=${ver}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${ver}"
+          echo "Version: ${{ steps.version.outputs.version }}"
           echo "Crates: ${{ inputs.crates }}"
           echo "Merge SHA: ${{ inputs.merge-sha }}"
 
