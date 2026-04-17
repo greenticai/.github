@@ -8,7 +8,8 @@
 # 4. Create a PR targeting main with the 'release' label
 #
 # The PR goes through normal CI (build, test, clippy, semver-checks).
-# Once merged, weekly-stable-publish.yml picks it up and publishes to crates.io.
+# Once merged, tag-on-version-bump.yml creates the v{version} tag, which in
+# turn triggers crates-publish.yml in each repo to publish to crates.io.
 #
 # Environment:
 #   GH_TOKEN      — GitHub PAT/App token with repo scope across the orgs
