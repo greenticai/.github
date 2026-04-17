@@ -106,7 +106,7 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "wasm"
 tier = 1
-publishes = ["greentic-component-manifest", "greentic-component", "greentic-component-store", "greentic-component-runtime"]
+publishes = ["greentic-component-manifest", "greentic-component-store", "greentic-component-runtime", "greentic-component"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
