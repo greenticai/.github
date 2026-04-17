@@ -177,6 +177,25 @@ jobs:
             fi
           done
 
+      - name: Dry-run publish (metadata validation)
+        env:
+          DEV_VERSION: ${{ steps.version.outputs.dev }}
+        run: |
+          set -euo pipefail
+          # Catch Cargo.toml metadata errors (missing fields, bad readme paths,
+          # invalid license/keywords/categories, file inclusion/exclusion) before
+          # any real upload. --no-verify skips the build step (already covered by
+          # the build-test job). Runs per-crate since later crates depend on
+          # in-workspace crates and `cargo package` inspects the tree.
+          for crate in ${{ inputs.crates }}; do
+            echo "::group::Dry-run ${crate}"
+            cargo publish -p "${crate}" \
+              --registry corp-artifacts-greentic \
+              --dry-run --allow-dirty --no-verify
+            echo "::endgroup::"
+          done
+          echo "✓ Metadata OK for all crates"
+
       - name: Publish crates
         env:
           DEV_VERSION: ${{ steps.version.outputs.dev }}
