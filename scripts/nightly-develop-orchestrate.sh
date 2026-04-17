@@ -349,13 +349,9 @@ cat >> "${GITHUB_STEP_SUMMARY:-/dev/null}" <<EOF
 $(if [[ "$halted" == true ]]; then echo "**Halted early** — a tier had failures, downstream tiers were not processed."; fi)
 EOF
 
-# TODO: Cargo.lock auto-update
-# After all tiers succeed, a follow-up step should run `cargo update` in
-# each repo that had upstream dependency changes and commit the updated
-# Cargo.lock to develop. This requires:
-#   - Rust toolchain + CodeArtifact credentials on the runner
-#   - Push access to develop (bot bypass in branch protection)
-# Deferred until the dispatch+wait pipeline is proven stable.
+# Cargo.lock sync runs as a separate job in nightly-develop.yml (needs
+# Rust toolchain + AWS creds, which this orchestrate step doesn't carry).
+# See scripts/nightly-cargo-lock-sync.sh.
 
 # Output summary for downstream notification
 if [[ "$succeeded" -gt 0 ]]; then

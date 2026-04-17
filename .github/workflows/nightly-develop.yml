@@ -51,25 +51,71 @@ jobs:
           INPUT_FORCE: ${{ inputs.force }}
         run: bash scripts/nightly-develop-orchestrate.sh
 
+  cargo-lock-sync:
+    name: Cargo.lock sync
+    needs: [orchestrate]
+    if: needs.orchestrate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      summary: ${{ steps.sync.outputs.cargo_lock_summary }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Mint GitHub App token (org-wide)
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Sync Cargo.lock across repos
+        id: sync
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CODEARTIFACT_DOMAIN: ${{ secrets.CODEARTIFACT_DOMAIN }}
+          CODEARTIFACT_DOMAIN_OWNER: ${{ secrets.CODEARTIFACT_DOMAIN_OWNER }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: bash scripts/nightly-cargo-lock-sync.sh
+
   notify-success:
     name: Notify on success
-    needs: [orchestrate]
+    needs: [orchestrate, cargo-lock-sync]
     if: success()
     uses: ./.github/workflows/notify-success.yml
     with:
       workflow-name: nightly-develop
-      details: ${{ needs.orchestrate.outputs.summary }}
+      details: >-
+        ${{ needs.orchestrate.outputs.summary }}${{
+          needs.cargo-lock-sync.outputs.summary
+            && format(' | lock sync: {0}', needs.cargo-lock-sync.outputs.summary)
+            || ''
+        }}
     secrets:
       SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
 
   notify-failure:
     name: Notify on failure
-    needs: [orchestrate]
+    needs: [orchestrate, cargo-lock-sync]
     if: failure()
     uses: ./.github/workflows/notify-failure.yml
     with:
       workflow-name: nightly-develop
       step: orchestration
-      error: "Nightly dev-publish orchestration failed — check the run log"
+      error: "Nightly dev-publish orchestration or lock sync failed — check the run log"
     secrets:
       SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
