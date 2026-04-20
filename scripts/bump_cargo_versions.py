@@ -47,6 +47,7 @@ EXTRA_GREENTIC_CRATES: frozenset[str] = frozenset(
         "pack_component_template",
         "greentic-pack-lib",
         "oauth-testharness",
+        "runner-core",
     }
 )
 
@@ -63,6 +64,41 @@ DEP_SECTIONS: tuple[str, ...] = (
     "dependencies",
     "dev-dependencies",
     "build-dependencies",
+)
+
+# Keys in [package] / [workspace.package] that Cargo's manifest parser expects
+# to be either a string or an inline table — never a sub-table.  When tomli_w
+# round-trips a workspace-inheritance value (`{"workspace": True}`) at one of
+# these keys it emits `[package.version]\nworkspace = true` (sub-table form),
+# which Cargo rejects with "expected a version string or an inline table".
+# Workaround: before dumping, swap the dict for a sentinel string so tomli_w
+# emits a leaf key; afterwards rewrite the sentinel back to dotted-key form.
+INHERITABLE_PACKAGE_KEYS: frozenset[str] = frozenset(
+    {
+        "version",
+        "edition",
+        "rust-version",
+        "license",
+        "license-file",
+        "authors",
+        "categories",
+        "description",
+        "documentation",
+        "homepage",
+        "keywords",
+        "publish",
+        "readme",
+        "repository",
+        "exclude",
+        "include",
+        "links",
+    }
+)
+
+WORKSPACE_INHERIT_SENTINEL: str = "__GREENTIC_WORKSPACE_INHERIT__"
+_SENTINEL_LINE_RE = re.compile(
+    rf'^(?P<indent>[ \t]*)(?P<key>[A-Za-z0-9_-]+)\s*=\s*"{re.escape(WORKSPACE_INHERIT_SENTINEL)}"\s*$',
+    re.MULTILINE,
 )
 
 
@@ -129,6 +165,24 @@ def _make_range(to_major: int, to_minor: int) -> str:
     """Build the target range string."""
     next_minor = to_minor + 1
     return f">={to_major}.{to_minor}.0-0, <{to_major}.{next_minor}.0-0"
+
+
+def _is_workspace_inherit(value: object) -> bool:
+    """True if *value* is a `{workspace = true}` inheritance marker."""
+    return isinstance(value, dict) and value == {"workspace": True}
+
+
+def _substitute_workspace_inherit(pkg: dict) -> None:
+    """Replace ``{workspace=true}`` dicts at inheritable keys with a sentinel
+    string so tomli_w emits a leaf key.  See INHERITABLE_PACKAGE_KEYS."""
+    for key in list(pkg.keys()):
+        if key in INHERITABLE_PACKAGE_KEYS and _is_workspace_inherit(pkg[key]):
+            pkg[key] = WORKSPACE_INHERIT_SENTINEL
+
+
+def _restore_workspace_inherit(text: str) -> str:
+    """Rewrite sentinel leaf keys back to ``key.workspace = true`` form."""
+    return _SENTINEL_LINE_RE.sub(r"\g<indent>\g<key>.workspace = true", text)
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +258,15 @@ class Bumper:
             print(f"  {c}")
 
         if not self.dry_run:
+            # Sentinel-substitute workspace-inheritance dicts so tomli_w emits
+            # a leaf key instead of a sub-table; restore as dotted-key after.
+            _substitute_workspace_inherit(ws.get("package", {}))
+            _substitute_workspace_inherit(data.get("package", {}))
+
+            text = tomli_w.dumps(data)
+            text = _restore_workspace_inherit(text)
             with open(path, "wb") as f:
-                tomli_w.dump(data, f)
+                f.write(text.encode("utf-8"))
 
     # -- internals ---------------------------------------------------------
 
@@ -227,13 +288,19 @@ class Bumper:
         section_label: str | None = None,
     ) -> None:
         for name, spec in list(deps.items()):
-            if not _is_greentic(name):
+            # Resolve `package = "..."` alias before classifying.  Without
+            # this, aliased deps like `greentic_pack = { package =
+            # "greentic-pack-lib", version = "0.4" }` would be skipped because
+            # the table key (`greentic_pack`) doesn't match any greentic name.
+            if isinstance(spec, dict) and isinstance(spec.get("package"), str):
+                actual_package = spec["package"]
+            else:
+                actual_package = name
+
+            if actual_package in SKIP_CRATES:
                 continue
-            # Also skip if the crate is aliased via "package" to a skip crate
-            if isinstance(spec, dict):
-                actual_package = spec.get("package", name)
-                if actual_package in SKIP_CRATES:
-                    continue
+            if not _is_greentic(actual_package):
+                continue
 
             if isinstance(spec, str):
                 new = self._bump_version_string(spec)
