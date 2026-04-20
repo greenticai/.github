@@ -299,7 +299,7 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "host"
 tier = 4
-publishes = ["greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-runtime", "greentic-dw-cli"]
+publishes = ["greentic-dw-context", "greentic-dw-delegation", "greentic-dw-planning", "greentic-dw-reflection", "greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-workspace", "greentic-dw-runtime", "greentic-dw-cli"]
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
