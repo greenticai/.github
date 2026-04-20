@@ -16,11 +16,15 @@ on:
         type: string
         default: "--workspace --all-features"
       run-semver-checks:
-        description: "Run cargo-semver-checks against last published version"
+        description: "Run cargo-semver-checks in advisory mode (reports breaks as warnings, never blocks)"
         type: boolean
         default: false
       semver-checks-package:
         description: "Comma-separated list of packages to check (empty = all packages, which fails on unpublished crates)"
+        type: string
+        default: ""
+      semver-baseline-rev:
+        description: "Git ref to use as semver baseline (default: auto-resolve to latest vX.Y.Z tag)"
         type: string
         default: ""
       setup-script:
@@ -114,19 +118,51 @@ jobs:
       - run: cargo test ${{ inputs.test-args }}
 
   semver-checks:
+    # Advisory mode: reports breaking changes as warnings, never fails the job.
+    # The real semver gate lives in weekly-stable-prepare, which compares against
+    # the last v* tag at publish boundary. See plans/pre-release-minor-bump-lane.md.
     if: ${{ inputs.run-semver-checks }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
-      - uses: obi1kenobi/cargo-semver-checks-action@v2
+      - name: Resolve semver baseline
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.semver-baseline-rev }}" ]; then
+            echo "ref=${{ inputs.semver-baseline-rev }}" >> "$GITHUB_OUTPUT"
+            echo "Using explicit baseline: ${{ inputs.semver-baseline-rev }}"
+            exit 0
+          fi
+          TAG="$(git tag --list 'v*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | head -n1 || true)"
+          if [ -n "$TAG" ]; then
+            echo "ref=refs/tags/${TAG}" >> "$GITHUB_OUTPUT"
+            echo "Auto-resolved baseline to tag: ${TAG}"
+          else
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "::warning::No vX.Y.Z tag found; cargo-semver-checks will fall back to the latest published version on the registry."
+          fi
+      - id: semver
+        continue-on-error: true
+        uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           rust-toolchain: manual
           package: ${{ inputs.semver-checks-package }}
+          baseline-rev: ${{ steps.baseline.outputs.ref }}
+      - name: Emit advisory
+        if: steps.semver.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::warning title=Semver advisory::cargo-semver-checks detected a breaking change vs the current baseline. If intentional, plan to run start-next-minor.sh before the next stable cut. See plans/pre-release-minor-bump-lane.md."
