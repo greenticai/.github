@@ -6,6 +6,20 @@ Walks all Cargo.toml files under a directory and bumps:
   - greentic dependency version specs to a pre-release-compatible range
 
 Uses tomllib (read) + tomli_w (write) for structure-aware TOML editing.
+
+Examples
+--------
+Minor bump (writes ``X.Y.0`` for the package version)::
+
+    bump_cargo_versions.py --from 0.4 --to 0.5 ./greentic-bundle
+
+Patch bump within a minor (writes the exact ``--to-version``)::
+
+    bump_cargo_versions.py --from 0.5 --to 0.5 --to-version 0.5.1 ./greentic-runner
+
+Convert dep specs to range form without touching package versions::
+
+    bump_cargo_versions.py --from 0.4 --to 0.5 --deps-only ./greentic-runner
 """
 
 from __future__ import annotations
@@ -67,6 +81,20 @@ def _parse_minor(ver: str) -> tuple[int, int]:
     return int(parts[0]), int(parts[1])
 
 
+def _parse_full_version(ver: str) -> tuple[int, int, int]:
+    """Parse a 'major.minor.patch' string into (major, minor, patch).
+
+    Pre-release suffixes (e.g. '-dev.3') are not accepted here — use
+    --to with --to-version separately if you need them later.
+    """
+    parts = ver.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        raise argparse.ArgumentTypeError(
+            f"--to-version must be major.minor.patch (e.g. 0.5.1), got: {ver!r}"
+        )
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
 def _is_greentic(name: str) -> bool:
     """Return True if *name* is a greentic-ecosystem crate."""
     if name in SKIP_CRATES:
@@ -116,9 +144,10 @@ class Bumper:
         to_minor: int,
         dry_run: bool,
         deps_only: bool = False,
+        to_version: str | None = None,
     ):
         self.from_prefix = from_prefix
-        self.to_version = f"{to_major}.{to_minor}.0"
+        self.to_version = to_version or f"{to_major}.{to_minor}.0"
         self.range_spec = _make_range(to_major, to_minor)
         self.dry_run = dry_run
         self.deps_only = deps_only
@@ -260,6 +289,16 @@ def main() -> None:
         help="Target version prefix (e.g. 0.5)",
     )
     parser.add_argument(
+        "--to-version",
+        dest="to_version",
+        default=None,
+        help=(
+            "Explicit target package version (major.minor.patch, e.g. 0.5.1). "
+            "Overrides the default '<to>.0' so patch bumps don't downgrade. "
+            "Must agree with --to on major.minor."
+        ),
+    )
+    parser.add_argument(
         "--deps-only",
         action="store_true",
         help="Only convert dep specs to range format, skip version bumping",
@@ -281,6 +320,25 @@ def main() -> None:
     _parse_minor(args.from_ver)
     to_major, to_minor = _parse_minor(args.to_ver)
 
+    # Validate --to-version (if given) and ensure it agrees with --to on
+    # major.minor — otherwise the dep range and the package version would
+    # disagree, which is almost certainly a typo.
+    to_version: str | None = None
+    if args.to_version is not None:
+        try:
+            tv_major, tv_minor, _ = _parse_full_version(args.to_version)
+        except argparse.ArgumentTypeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if (tv_major, tv_minor) != (to_major, to_minor):
+            print(
+                f"Error: --to-version {args.to_version} disagrees with "
+                f"--to {args.to_ver} on major.minor",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        to_version = args.to_version
+
     root = Path(args.path).resolve()
     if not root.is_dir():
         print(f"Error: {root} is not a directory", file=sys.stderr)
@@ -292,6 +350,7 @@ def main() -> None:
         to_minor=to_minor,
         dry_run=args.dry_run,
         deps_only=args.deps_only,
+        to_version=to_version,
     )
 
     # Walk all Cargo.toml files, skip target/ directories
