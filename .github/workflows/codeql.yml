@@ -10,7 +10,7 @@ on:
       rust-version:
         description: "Rust toolchain version (only when languages includes rust)"
         type: string
-        default: "1.94.0"
+        default: "1.95.0"
       build-command:
         description: "Custom build command (empty = autobuild)"
         type: string

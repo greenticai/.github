@@ -48,7 +48,7 @@ CANONICAL_DIR="$GITHUB_REPO_ROOT/toolchain"
 MANIFEST="$CANONICAL_DIR/REPO_MANIFEST.toml"
 WORKSPACE="${GREENTIC_WORKSPACE:-$(cd "$GITHUB_REPO_ROOT/.." && pwd)}"
 BIZ_DIR="$WORKSPACE/GREENTIC-BIZ"
-RUST_VERSION="1.94"
+RUST_VERSION="1.95"
 
 # Sanity check: canonical files must exist
 if [[ ! -f "$MANIFEST" ]]; then
