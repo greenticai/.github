@@ -25,7 +25,7 @@ on:
         description: "Rust toolchain version"
         required: false
         type: string
-        default: "1.94.0"
+        default: "1.95.0"
       extra-files:
         description: "Newline-separated list of repo-root files to include alongside the binary in the archive (e.g. README.md, LICENSE)"
         required: false

@@ -10,7 +10,7 @@ on:
       rust-version:
         description: "Rust toolchain version"
         type: string
-        default: "1.94.0"
+        default: "1.95.0"
       semver-checks-package:
         description: "Comma-separated list of packages to check (empty = all)"
         type: string
