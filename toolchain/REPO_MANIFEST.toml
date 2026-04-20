@@ -205,7 +205,7 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "wasm"
 tier = 4
-publishes = ["greentic-i18n", "runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
+publishes = ["runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
 exclude-crates = ["echo-secret", "component-v0-6-dummy"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
