@@ -1,0 +1,124 @@
+name: Nightly Semver Advisory
+
+# Advisory-mode cargo-semver-checks, runnable on a schedule (one aggregated
+# annotation per repo per day) rather than on every PR. The real semver gate
+# lives in weekly-stable-prepare, which compares against the last v* tag at
+# publish boundary. See plans/pre-release-minor-bump-lane.md for the split
+# between "compass" (this) and "gate" (weekly-stable-prepare).
+#
+# Per-repo callers add:
+#   on:
+#     schedule: [{ cron: "0 4 * * *" }]   # after nightly-develop tier 0 publishes
+#     workflow_dispatch:
+#
+# This workflow is always advisory: it never fails the job, it emits a
+# ::warning:: annotation and a step summary when a breaking delta is
+# detected. Consumers should check the run summary, not a red check.
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      semver-checks-package:
+        description: "Comma-separated list of packages to check (empty = all workspace members). Scope to published crates only; otherwise the action fails on unpublished members."
+        type: string
+        default: ""
+      semver-baseline-rev:
+        description: "Git ref to use as semver baseline (default: auto-resolve to latest vX.Y.Z tag)"
+        type: string
+        default: ""
+      setup-script:
+        description: "Optional shell commands to run before the check"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  semver-advisory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Resolve semver baseline
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.semver-baseline-rev }}" ]; then
+            echo "ref=${{ inputs.semver-baseline-rev }}" >> "$GITHUB_OUTPUT"
+            echo "label=${{ inputs.semver-baseline-rev }}" >> "$GITHUB_OUTPUT"
+            echo "Using explicit baseline: ${{ inputs.semver-baseline-rev }}"
+            exit 0
+          fi
+          TAG="$(git tag --list 'v*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | head -n1 || true)"
+          if [ -n "$TAG" ]; then
+            echo "ref=refs/tags/${TAG}" >> "$GITHUB_OUTPUT"
+            echo "label=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "Auto-resolved baseline to tag: ${TAG}"
+          else
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "label=registry-latest" >> "$GITHUB_OUTPUT"
+            echo "::warning::No vX.Y.Z tag found; cargo-semver-checks will fall back to the latest published version on the registry."
+          fi
+
+      - id: semver
+        continue-on-error: true
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          rust-toolchain: manual
+          package: ${{ inputs.semver-checks-package }}
+          baseline-rev: ${{ steps.baseline.outputs.ref }}
+
+      - name: Emit advisory
+        if: always()
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.semver.outcome }}
+          BASELINE_LABEL: ${{ steps.baseline.outputs.label }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Semver advisory"
+            echo ""
+            echo "- **Baseline:** \`${BASELINE_LABEL}\`"
+            echo "- **Outcome:** \`${OUTCOME}\`"
+            echo ""
+            if [ "${OUTCOME}" = "failure" ]; then
+              echo "cargo-semver-checks detected a **breaking change** vs the baseline above."
+              echo ""
+              echo "If intentional, plan to run \`start-next-minor.sh\` before the next stable cut."
+              echo "See \`plans/pre-release-minor-bump-lane.md\`."
+            else
+              echo "No breaking changes detected."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${OUTCOME}" = "failure" ]; then
+            echo "::warning title=Semver advisory::cargo-semver-checks detected a breaking change vs ${BASELINE_LABEL}. See job summary for details."
+          fi
