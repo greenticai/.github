@@ -1,0 +1,11 @@
+# Canonical toolchain for Greentic host repos.
+# Source: greenticai/.github/toolchain/host/rust-toolchain.toml
+# Sync: ./sync-toolchain.sh (from workspace root)
+# Do not edit per-repo.
+#
+# Present at repo root so the reusable `toolchain-check` job emits no
+# drift warning during self-test runs. See selftest/README.md.
+
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]

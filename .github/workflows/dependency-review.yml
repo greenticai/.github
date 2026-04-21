@@ -35,6 +35,12 @@ on:
       CODEX_OPENAI_API_KEY:
         description: "Alternative Codex API key"
         required: false
+      GREENTIC_CI_APP_ID:
+        description: "GitHub App ID for greentic-ci App token minting (used by the Codex remediation job)"
+        required: false
+      GREENTIC_CI_APP_PRIVATE_KEY:
+        description: "GitHub App private key for greentic-ci App token minting (used by the Codex remediation job)"
+        required: false
 
 permissions:
   contents: read
