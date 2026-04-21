@@ -61,6 +61,8 @@ jobs:
           curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
           curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
 
+          # shellcheck disable=SC2034  # DRIFT is tracked during rollout; will
+          # be wired to `exit $DRIFT` after Phase A per plans/binary-bifurcation.md.
           DRIFT=0
           if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
             echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
@@ -72,7 +74,6 @@ jobs:
             diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
             DRIFT=1
           fi
-          # Warning-only initially; upgrade to exit $DRIFT after stabilization
 
   fmt:
     runs-on: ubuntu-latest
