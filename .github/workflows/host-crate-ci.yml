@@ -72,7 +72,8 @@ jobs:
             diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
             DRIFT=1
           fi
-          # Warning-only initially; upgrade to exit $DRIFT after stabilization
+          # Silence shellcheck SC2034 during Phase-A rollout grace; see pr-ci.yml.
+          : "${DRIFT}"
 
   fmt:
     runs-on: ubuntu-latest

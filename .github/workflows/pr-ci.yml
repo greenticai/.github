@@ -124,7 +124,13 @@ jobs:
             diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
             DRIFT=1
           fi
-          # Warning-only during stabilization; upgrade to `exit $DRIFT` after rollout.
+          # DRIFT is accumulated during the Phase-A rollout grace period,
+          # ready to be wired to `exit $DRIFT` once hard-fail flips on. The
+          # null-read below keeps shellcheck SC2034 quiet without needing a
+          # directive scoped to a specific assignment (shellcheck reports
+          # SC2034 at the LAST assignment, which makes directive placement
+          # fragile here). See plans/binary-bifurcation.md.
+          : "${DRIFT}"
 
   fmt:
     runs-on: ubuntu-latest
