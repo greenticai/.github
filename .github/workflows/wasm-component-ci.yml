@@ -1,5 +1,13 @@
 name: WASM Component CI
 
+# Thin wrapper around `pr-ci.yml` with `variant: wasm`. The fmt/clippy/test/
+# wasm/toolchain-check jobs live in pr-ci.yml; this file only translates the
+# historical input surface to pr-ci.yml inputs. See plans/binary-bifurcation.md
+# Phase A.2.
+#
+# Input surface preserved verbatim for back-compat with ~14 callers (including
+# dev-publish workflows that reuse this for workflow_dispatch-only runs).
+
 on:
   workflow_call:
     inputs:
@@ -51,139 +59,24 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  toolchain-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Check toolchain drift
-        run: |
-          VARIANT="${{ inputs.toolchain-variant }}"
-          BASE="https://raw.githubusercontent.com/greenticai/.github/main/toolchain"
-
-          curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
-          curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
-
-          DRIFT=0
-          if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
-            echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
-            diff rust-toolchain.toml /tmp/canonical-toolchain.toml || true
-            DRIFT=1
-          fi
-          if ! diff -q rustfmt.toml /tmp/canonical-rustfmt.toml >/dev/null 2>&1; then
-            echo "::warning::rustfmt.toml differs from canonical"
-            diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
-            DRIFT=1
-          fi
-          # Silence shellcheck SC2034 during Phase-A rollout grace; see pr-ci.yml.
-          : "${DRIFT}"
-
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-          components: rustfmt
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - run: cargo clippy ${{ inputs.clippy-args }}
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-      - uses: Swatinem/rust-cache@v2
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - run: cargo test ${{ inputs.test-args }}
-
-  wasm:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-          targets: wasm32-wasip2
-      - uses: Swatinem/rust-cache@v2
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - name: Install cargo-binstall
-        if: ${{ inputs.use-cargo-component || inputs.validate-component }}
-        uses: taiki-e/install-action@cargo-binstall
-      - name: Ensure cargo bin path is on PATH
-        if: ${{ inputs.use-cargo-component || inputs.validate-component }}
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Install cargo-component
-        if: ${{ inputs.use-cargo-component }}
-        run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }} --force
-      - name: Check (wasm32-wasip2)
-        run: |
-          if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
-            cargo component check ${{ inputs.wasm-check-args }}
-          else
-            cargo check ${{ inputs.wasm-check-args }}
-          fi
-      - name: Build (wasm32-wasip2, release)
-        run: |
-          if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
-            cargo component build ${{ inputs.wasm-build-args }}
-          else
-            cargo build ${{ inputs.wasm-build-args }}
-          fi
-      - name: Install wasm-tools
-        if: ${{ inputs.validate-component }}
-        run: cargo binstall -y wasm-tools --force
-      - name: Verify wasm-tools
-        if: ${{ inputs.validate-component }}
-        run: |
-          echo "PATH=$PATH"
-          ls -la "$HOME/.cargo/bin" || true
-          command -v wasm-tools
-          wasm-tools --version
-      - name: Validate component
-        if: ${{ inputs.validate-component }}
-        run: |
-          set -euo pipefail
-          command -v wasm-tools >/dev/null 2>&1 || {
-            echo "::error::wasm-tools missing from PATH=$PATH"
-            exit 127
-          }
-          count=0
-          for wasm in ${{ inputs.wasm-validate-glob }}; do
-            [ -f "$wasm" ] || continue
-            echo "Validating: $wasm"
-            wasm-tools validate "$wasm"
-            if wasm-tools component wit "$wasm" > /dev/null 2>&1; then
-              echo "  ✓ valid WIT component"
-            else
-              echo "  ✓ valid core module (not a component)"
-            fi
-            count=$((count + 1))
-          done
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No .wasm files found matching ${{ inputs.wasm-validate-glob }}"
-            exit 1
-          fi
-          echo "Validated $count module(s)"
+  pr-ci:
+    # Delegate fmt/clippy/test/wasm/toolchain-check to the unified PR-CI
+    # baseline. `run-dependency-review: false` preserves parity with this
+    # workflow's pre-A.2 behavior (callers that want dep-review invoke
+    # dependency-review.yml directly).
+    uses: ./.github/workflows/pr-ci.yml
+    with:
+      variant: wasm
+      rust-version: ${{ inputs.rust-version }}
+      clippy-args: ${{ inputs.clippy-args }}
+      test-args: ${{ inputs.test-args }}
+      setup-script: ${{ inputs.setup-script }}
+      toolchain-variant: ${{ inputs.toolchain-variant }}
+      use-cargo-component: ${{ inputs.use-cargo-component }}
+      cargo-component-version: ${{ inputs.cargo-component-version }}
+      wasm-check-args: ${{ inputs.wasm-check-args }}
+      wasm-build-args: ${{ inputs.wasm-build-args }}
+      validate-component: ${{ inputs.validate-component }}
+      wasm-validate-glob: ${{ inputs.wasm-validate-glob }}
+      run-dependency-review: false
