@@ -114,10 +114,16 @@ jobs:
     uses: ./.github/workflows/pr-ci.yml
     with:
       variant: host
-      # Fixture intro may surface advisories on transitive criterion deps;
-      # don't fail the self-test on them. The dep-review plumbing is
-      # still exercised.
-      dep-review-warn-only: true
+      # The dep-review sub-job inside pr-ci.yml fails on this repo with
+      # "Dependency review is not supported on this repository. Please
+      # ensure that Dependency graph is enabled" — Dependency Graph is
+      # not turned on for greenticai/.github (Settings → Security). The
+      # `warn-only` flag only converts severity-level findings to
+      # warnings; it doesn't cover "feature disabled". Skip the dep-
+      # review sub-job here — it calls a third-party action whose
+      # correctness isn't ours to validate, and every per-repo caller
+      # of pr-ci.yml still exercises the live path on real PRs.
+      run-dependency-review: false
       setup-script: |
         set -euo pipefail
         cp -a selftest/. ./
@@ -137,7 +143,8 @@ jobs:
       validate-component: false
       wasm-check-args: '--target wasm32-wasip2 --lib'
       wasm-build-args: '--target wasm32-wasip2 --release --lib'
-      dep-review-warn-only: true
+      # See pr-ci-host for the dep-review skip rationale.
+      run-dependency-review: false
       setup-script: |
         set -euo pipefail
         cp -a selftest/. ./
@@ -191,6 +198,11 @@ jobs:
       setup-script: |
         set -euo pipefail
         cp -a selftest/. ./
+        # cargo-llvm-cov --output-path doesn't auto-create parent dirs;
+        # the `greentic-dev coverage` wrapper (used by real callers) does,
+        # so the reusable itself doesn't. For this raw-cargo-llvm-cov
+        # invocation, pre-create the output dir here.
+        mkdir -p target/coverage
 
   nightly-audit:
     needs: actionlint
