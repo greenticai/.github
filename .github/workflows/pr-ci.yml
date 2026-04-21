@@ -113,13 +113,6 @@ jobs:
           curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
           curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
 
-          # DRIFT is accumulated during the Phase-A rollout grace period,
-          # ready to be wired to `exit $DRIFT` once hard-fail flips on. See
-          # plans/binary-bifurcation.md. Until then, shellcheck flags it as
-          # unused — suppress with a directive that sits IMMEDIATELY above
-          # the target (no intervening comments or blank lines, or the
-          # directive's scope is broken and SC2034 re-fires).
-          # shellcheck disable=SC2034
           DRIFT=0
           if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
             echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
@@ -131,6 +124,13 @@ jobs:
             diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
             DRIFT=1
           fi
+          # DRIFT is accumulated during the Phase-A rollout grace period,
+          # ready to be wired to `exit $DRIFT` once hard-fail flips on. The
+          # null-read below keeps shellcheck SC2034 quiet without needing a
+          # directive scoped to a specific assignment (shellcheck reports
+          # SC2034 at the LAST assignment, which makes directive placement
+          # fragile here). See plans/binary-bifurcation.md.
+          : "${DRIFT}"
 
   fmt:
     runs-on: ubuntu-latest

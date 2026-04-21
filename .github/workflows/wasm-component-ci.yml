@@ -67,9 +67,6 @@ jobs:
           curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
           curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
 
-          # DRIFT is accumulated during the Phase-A rollout grace period;
-          # see pr-ci.yml for the full rationale.
-          # shellcheck disable=SC2034
           DRIFT=0
           if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
             echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
@@ -81,6 +78,8 @@ jobs:
             diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
             DRIFT=1
           fi
+          # Silence shellcheck SC2034 during Phase-A rollout grace; see pr-ci.yml.
+          : "${DRIFT}"
 
   fmt:
     runs-on: ubuntu-latest
