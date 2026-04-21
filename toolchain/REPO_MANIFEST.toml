@@ -667,3 +667,54 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
+
+[repos.greentic-designer-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
+version-track = { from = "0.2", to = "0.3" }
+weekly-stable-enabled = false
+
+[repos.greentic-bundle-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
+[repos.greentic-provider-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
+[repos.greentic-deployer-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
+[repos.greentic-store-server]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []  # service binary, deployed via Docker — not a crates.io crate
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
+[repos.greentic-designer-extension-action]
+org = "greenticai"
+variant = "host"  # placeholder: repo is a composite GitHub Action (action.yml + bash)
+tier = 7
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+# Excluded from Rust toolchain sync + publish automation: no Cargo.toml.
+# Versioned via manually curated v1 major tag + v1.x.x release tags.
+archived = true
