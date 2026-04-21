@@ -1,0 +1,96 @@
+name: Nightly Perf
+
+# Scheduled perf reusable. Runs the perf_scaling / perf_timeout guards,
+# then a criterion bench smoke run, then uploads the criterion output as
+# an artifact for trend tracking.
+#
+# Typical caller (schedule):
+#   on:
+#     schedule: [{ cron: "47 3 * * *" }]
+#     workflow_dispatch:
+#   jobs:
+#     perf:
+#       uses: greenticai/.github/.github/workflows/nightly-perf.yml@main
+#       with:
+#         test-args: "-p greentic-component --features cli --test perf_scaling --test perf_timeout --locked"
+#         bench-args: "-p greentic-component --features cli --bench perf --locked -- --sample-size 10"
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      test-args:
+        description: "Arguments passed to cargo test (perf guards). Empty skips the guard step."
+        type: string
+        default: "--workspace --test perf_scaling --test perf_timeout"
+      bench-args:
+        description: "Arguments passed to cargo bench. Empty skips the bench step."
+        type: string
+        default: "--workspace --bench perf -- --sample-size 10"
+      setup-script:
+        description: "Optional shell commands to run before perf steps (e.g., fixture generation)"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+      upload-criterion-artifact:
+        description: "Upload target/criterion as a workflow artifact"
+        type: boolean
+        default: true
+      criterion-artifact-name:
+        description: "Name of the criterion artifact"
+        type: string
+        default: "nightly-criterion"
+      criterion-artifact-path:
+        description: "Path glob for the criterion artifact"
+        type: string
+        default: "target/criterion"
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        type: number
+        default: 60
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Run perf guard tests
+        if: inputs.test-args != ''
+        run: cargo test ${{ inputs.test-args }}
+
+      - name: Run criterion benchmark smoke
+        if: inputs.bench-args != ''
+        run: cargo bench ${{ inputs.bench-args }}
+
+      - name: Upload criterion artifact
+        if: ${{ always() && inputs.upload-criterion-artifact && inputs.bench-args != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.criterion-artifact-name }}
+          path: ${{ inputs.criterion-artifact-path }}
+          if-no-files-found: ignore

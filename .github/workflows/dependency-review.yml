@@ -19,6 +19,15 @@ on:
         description: "SPDX license denylist (empty = no license check)"
         type: string
         default: ""
+      enable-codex-remediation:
+        description: >-
+          Run the Codex auto-remediation job on PR when a vulnerable dep change
+          is detected. Default: false. Phase A of plans/binary-bifurcation.md
+          moves Codex off pull_request; the nightly-audit.yml caller is the
+          new home. Pass true here only if a specific repo still wants the
+          PR-time Codex path.
+        type: boolean
+        default: false
     secrets:
       OPENAI_API_KEY:
         description: "OpenAI API key for Codex remediation"
@@ -70,10 +79,14 @@ jobs:
           fi
 
   # ── Job 2: Optional Codex auto-remediation for vulnerable deps ─────
+  # Gated behind `enable-codex-remediation` (default: false). Per
+  # plans/binary-bifurcation.md Phase A, Codex remediation runs nightly
+  # via nightly-audit.yml sibling composition, not on pull_request.
   codex-dependency-fix:
     needs: dependency-review
     if: >-
-      needs.dependency-review.outputs.has-vulnerabilities == 'true'
+      inputs.enable-codex-remediation
+      && needs.dependency-review.outputs.has-vulnerabilities == 'true'
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:

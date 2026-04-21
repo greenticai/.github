@@ -1,0 +1,169 @@
+name: Nightly Audit
+
+# Scheduled security-audit reusable. Runs cargo-audit (advisory DB) and
+# (optionally) cargo-deny (licenses, advisories, bans). Replaces per-PR
+# audit invocations; the real-time signal now comes from the dependency-
+# review action in pr-ci.yml.
+#
+# Codex remediation (codex-security-fix.yml, codex-semver-fix.yml) is
+# intentionally not nested here: those reusables already take
+# `workflow_call` and should be wired by the per-repo nightly caller as
+# sibling jobs so they run regardless of audit outcome. Example:
+#
+#   on:
+#     schedule: [{ cron: "29 4 * * *" }]
+#     workflow_dispatch:
+#   jobs:
+#     audit:
+#       uses: greenticai/.github/.github/workflows/nightly-audit.yml@main
+#     codex-security:
+#       uses: greenticai/.github/.github/workflows/codex-security-fix.yml@main
+#       secrets: inherit
+#     codex-semver:
+#       uses: greenticai/.github/.github/workflows/codex-semver-fix.yml@main
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      run-cargo-audit:
+        description: "Run cargo-audit"
+        type: boolean
+        default: true
+      audit-args:
+        description: "Extra arguments passed to cargo audit (e.g., '--ignore RUSTSEC-2023-0071')"
+        type: string
+        default: ""
+      fail-on-audit:
+        description: "Fail the job on cargo-audit advisories. Set false to keep audit advisory-only."
+        type: boolean
+        default: true
+      run-cargo-deny:
+        description: "Run cargo-deny (requires a deny.toml at the repo root unless deny-config overrides)"
+        type: boolean
+        default: true
+      deny-config:
+        description: "Path to cargo-deny config file (default: deny.toml)"
+        type: string
+        default: "deny.toml"
+      deny-checks:
+        description: "Space-separated cargo-deny checks (advisories, bans, licenses, sources). Empty = all."
+        type: string
+        default: ""
+      fail-on-deny:
+        description: "Fail the job on cargo-deny violations. Set false to keep deny advisory-only during rollout."
+        type: boolean
+        default: true
+      setup-script:
+        description: "Optional shell commands to run before audit steps"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        if: ${{ inputs.run-cargo-audit || inputs.run-cargo-deny }}
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-audit
+        if: ${{ inputs.run-cargo-audit }}
+        run: cargo binstall -y cargo-audit
+
+      - name: Install cargo-deny
+        if: ${{ inputs.run-cargo-deny }}
+        run: cargo binstall -y cargo-deny
+
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Run cargo-audit
+        if: ${{ inputs.run-cargo-audit }}
+        id: audit
+        continue-on-error: ${{ !inputs.fail-on-audit }}
+        run: cargo audit ${{ inputs.audit-args }}
+
+      - name: Check deny config exists
+        if: ${{ inputs.run-cargo-deny }}
+        id: deny_cfg
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "${{ inputs.deny-config }}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::cargo-deny enabled but ${{ inputs.deny-config }} not found; skipping deny step."
+          fi
+
+      - name: Run cargo-deny
+        if: ${{ inputs.run-cargo-deny && steps.deny_cfg.outputs.present == 'true' }}
+        id: deny
+        continue-on-error: ${{ !inputs.fail-on-deny }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.deny-checks }}" ]; then
+            cargo deny --config "${{ inputs.deny-config }}" check ${{ inputs.deny-checks }}
+          else
+            cargo deny --config "${{ inputs.deny-config }}" check
+          fi
+
+      - name: Emit summary
+        if: always()
+        shell: bash
+        env:
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+          DENY_OUTCOME: ${{ steps.deny.outcome }}
+          DENY_PRESENT: ${{ steps.deny_cfg.outputs.present }}
+        run: |
+          {
+            echo "## Nightly audit"
+            echo ""
+            echo "| Check | Outcome |"
+            echo "|-------|---------|"
+            if [ "${{ inputs.run-cargo-audit }}" = "true" ]; then
+              echo "| cargo-audit | \`${AUDIT_OUTCOME:-skipped}\` |"
+            else
+              echo "| cargo-audit | disabled |"
+            fi
+            if [ "${{ inputs.run-cargo-deny }}" = "true" ]; then
+              if [ "${DENY_PRESENT:-false}" = "true" ]; then
+                echo "| cargo-deny | \`${DENY_OUTCOME:-skipped}\` |"
+              else
+                echo "| cargo-deny | no \`${{ inputs.deny-config }}\` |"
+              fi
+            else
+              echo "| cargo-deny | disabled |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
