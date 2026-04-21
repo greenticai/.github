@@ -1,0 +1,65 @@
+name: Perf Smoke
+
+# Sub-minute perf-guard reusable. Runs the perf_scaling / perf_timeout
+# integration tests only — no criterion benchmark sweep. Suitable for
+# `on: pull_request` so regressions in scaling/timeout shapes are caught
+# pre-merge. The full criterion run lives in nightly-perf.yml.
+#
+# Typical caller:
+#   on: { pull_request: null }
+#   jobs:
+#     perf-smoke:
+#       uses: greenticai/.github/.github/workflows/perf-smoke.yml@main
+#       with:
+#         test-args: "-p greentic-component --no-default-features --features cli --test perf_scaling --test perf_timeout --locked"
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      test-args:
+        description: "Arguments passed to cargo test. Should target the perf_scaling and perf_timeout tests."
+        type: string
+        default: "--workspace --test perf_scaling --test perf_timeout"
+      setup-script:
+        description: "Optional shell commands to run before the perf-guard tests"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Run perf guard tests
+        run: cargo test ${{ inputs.test-args }}

@@ -1,0 +1,106 @@
+name: Nightly Coverage
+
+# Reusable coverage workflow. Installs the canonical toolchain
+# (cargo-llvm-cov, cargo-nextest, greentic-dev), runs the coverage command,
+# uploads the report as a workflow artifact.
+#
+# Typical caller (schedule):
+#   on:
+#     schedule: [{ cron: "17 3 * * *" }]
+#     workflow_dispatch:
+#   jobs:
+#     coverage:
+#       uses: greenticai/.github/.github/workflows/nightly-coverage.yml@main
+#
+# Repos with a coverage policy file pass `coverage-command: "greentic-dev coverage --policy-file coverage-policy.json"`.
+# Repos that bypass greentic-dev can pass the raw cargo-llvm-cov invocation.
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      coverage-command:
+        description: "Coverage invocation. Defaults to 'greentic-dev coverage'. Override to add --policy-file or switch to raw cargo-llvm-cov."
+        type: string
+        default: "greentic-dev coverage"
+      install-greentic-dev:
+        description: "Install greentic-dev (provides the coverage wrapper). Disable if using raw cargo-llvm-cov."
+        type: boolean
+        default: true
+      install-cargo-nextest:
+        description: "Install cargo-nextest (used by greentic-dev coverage)"
+        type: boolean
+        default: true
+      setup-script:
+        description: "Optional shell commands to run before coverage (e.g., fixtures prep)"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+      artifact-name:
+        description: "Name of the uploaded coverage artifact"
+        type: string
+        default: "nightly-coverage-report"
+      artifact-path:
+        description: "Path glob for the coverage artifact upload"
+        type: string
+        default: "target/coverage/"
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        type: number
+        default: 60
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-llvm-cov
+        run: cargo binstall -y cargo-llvm-cov
+
+      - name: Install cargo-nextest
+        if: ${{ inputs.install-cargo-nextest }}
+        run: cargo binstall -y cargo-nextest
+
+      - name: Install greentic-dev
+        if: ${{ inputs.install-greentic-dev }}
+        run: cargo binstall -y greentic-dev
+
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Run coverage
+        run: ${{ inputs.coverage-command }}
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+          if-no-files-found: ignore
