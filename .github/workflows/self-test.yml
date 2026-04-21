@@ -51,9 +51,15 @@ on:
     - cron: '23 3 * * 1'
 
 permissions:
+  # Workflow-level permissions act as a CAP on every job's GITHUB_TOKEN:
+  # a job cannot declare a `permissions:` entry that is not listed here
+  # (violating this rule yields a `startup_failure` before any job runs,
+  # with no logs or annotations). Keep this block in sync with the union
+  # of every `permissions:` block across the jobs below.
   contents: read
   pull-requests: write    # dependency-review PR summary, pr-ci dep-review
   security-events: write  # codeql
+  actions: read           # codeql (github/codeql-action reads workflow runs)
 
 concurrency:
   group: self-test-${{ github.ref }}
