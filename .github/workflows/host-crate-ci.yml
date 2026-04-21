@@ -58,6 +58,16 @@ jobs:
     # `run-dependency-review: false` preserves parity with this workflow's
     # pre-A.2 behavior (callers that want dep-review invoke dependency-review.yml
     # directly). Wrapping into pr-ci.yml cannot add it implicitly.
+    #
+    # `pull-requests: write` is forwarded even though dep-review is gated
+    # off here: GitHub validates nested-reusable permissions at graph-build
+    # time, before `if:` is evaluated, so pr-ci.yml's `dependency-review`
+    # job (which statically declares `pull-requests: write`) fails startup
+    # unless the caller chain grants it. Callers still opt in via their own
+    # `permissions:` block — this line only avoids capping it back to none.
+    permissions:
+      contents: read
+      pull-requests: write
     uses: ./.github/workflows/pr-ci.yml
     with:
       variant: host
