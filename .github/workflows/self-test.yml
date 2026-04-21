@@ -1,0 +1,240 @@
+name: Reusable workflows self-test
+
+# Exercises every reusable CI workflow in this repo against a tiny fixture
+# crate in `selftest/`. A typo or logic regression in a reusable fails
+# here before it ships to ~60 per-repo callers.
+#
+# See `plans/binary-bifurcation.md` Phase A.3 and `selftest/README.md`.
+#
+# ── Reusables intentionally NOT self-tested ────────────────────────────
+# These have destructive side effects, require secrets the self-test
+# cannot provide, or their only job is gated on context the self-test
+# cannot supply. They are still covered by the `actionlint` job below.
+#
+#   auto-tag.yml, tag-on-version-bump.yml
+#     Create git tags — would pollute repo history.
+#   crates-publish.yml
+#     Publishes to crates.io — must never run from a test harness.
+#   dev-publish.yml
+#     Publishes to AWS CodeArtifact — same concern.
+#   release-binaries.yml
+#     Cuts a GitHub Release and uploads cross-platform binaries.
+#   notify-failure.yml, notify-success.yml
+#     Posts to Slack — side effect visible to the team.
+#   codex-security-fix.yml, codex-semver-fix.yml
+#     Require OPENAI_API_KEY; mutate PR branches via the Codex action.
+#   dependabot-automerge.yml
+#     Only acts when github.actor == dependabot[bot]; a human-triggered
+#     self-test skips the only job, yielding no real signal.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pr-ci.yml'
+      - '.github/workflows/host-crate-ci.yml'
+      - '.github/workflows/wasm-component-ci.yml'
+      - '.github/workflows/nightly-semver-advisory.yml'
+      - '.github/workflows/nightly-coverage.yml'
+      - '.github/workflows/nightly-audit.yml'
+      - '.github/workflows/perf-smoke.yml'
+      - '.github/workflows/nightly-perf.yml'
+      - '.github/workflows/dependency-review.yml'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/self-test.yml'
+      - 'selftest/**'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+  workflow_dispatch:
+  schedule:
+    # Weekly re-run catches environmental drift (new clippy lints, dep
+    # advisories) and exercises the reusables kept off the PR path.
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+  pull-requests: write    # dependency-review PR summary, pr-ci dep-review
+  security-events: write  # codeql
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Static lint of the reusables within the self-test perimeter plus
+  # the self-test workflow itself. Scoped to avoid pre-existing findings
+  # in out-of-scope workflows (codex-*.yml, onboard-repo.yml) that this
+  # PR deliberately doesn't touch.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install actionlint
+        run: |
+          bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          echo "$PWD" >> "$GITHUB_PATH"
+      - name: Run actionlint
+        run: |
+          actionlint -color \
+            .github/workflows/self-test.yml \
+            .github/workflows/pr-ci.yml \
+            .github/workflows/host-crate-ci.yml \
+            .github/workflows/wasm-component-ci.yml \
+            .github/workflows/nightly-semver-advisory.yml \
+            .github/workflows/nightly-coverage.yml \
+            .github/workflows/nightly-audit.yml \
+            .github/workflows/perf-smoke.yml \
+            .github/workflows/nightly-perf.yml \
+            .github/workflows/dependency-review.yml \
+            .github/workflows/codeql.yml
+
+  pr-ci-host:
+    needs: actionlint
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/pr-ci.yml
+    with:
+      variant: host
+      # Fixture intro may surface advisories on transitive criterion deps;
+      # don't fail the self-test on them. The dep-review plumbing is
+      # still exercised.
+      dep-review-warn-only: true
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  pr-ci-wasm:
+    needs: actionlint
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/pr-ci.yml
+    with:
+      variant: wasm
+      # Fixture root uses the host rust-toolchain.toml; drift check
+      # compares against the host canonical.
+      toolchain-variant: host
+      # Fixture is a plain Rust library, not a WIT component.
+      validate-component: false
+      wasm-check-args: '--target wasm32-wasip2 --lib'
+      wasm-build-args: '--target wasm32-wasip2 --release --lib'
+      dep-review-warn-only: true
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  host-crate-ci:
+    needs: actionlint
+    uses: ./.github/workflows/host-crate-ci.yml
+    with:
+      run-semver-checks: true
+      # HEAD-vs-HEAD self-compare. Exercises the workflow's baseline
+      # resolution + advisory path without requiring a published crate
+      # or a tagged baseline. The semver-checks step uses
+      # continue-on-error so any upstream action oddity does not fail
+      # the job.
+      semver-baseline-rev: HEAD
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  wasm-component-ci:
+    needs: actionlint
+    uses: ./.github/workflows/wasm-component-ci.yml
+    with:
+      toolchain-variant: host
+      validate-component: false
+      wasm-check-args: '--target wasm32-wasip2 --lib'
+      wasm-build-args: '--target wasm32-wasip2 --release --lib'
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  nightly-semver:
+    needs: actionlint
+    uses: ./.github/workflows/nightly-semver-advisory.yml
+    with:
+      semver-baseline-rev: HEAD
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  nightly-coverage:
+    needs: actionlint
+    uses: ./.github/workflows/nightly-coverage.yml
+    with:
+      # Skip the greentic-dev bootstrap; exercise the raw cargo-llvm-cov
+      # install + run + artifact upload path instead.
+      install-greentic-dev: false
+      install-cargo-nextest: false
+      coverage-command: 'cargo llvm-cov --lcov --output-path target/coverage/lcov.info --lib --tests'
+      artifact-name: self-test-coverage
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  nightly-audit:
+    needs: actionlint
+    uses: ./.github/workflows/nightly-audit.yml
+    with:
+      # Don't fail the self-test on upstream RUSTSEC advisories against
+      # criterion's transitive deps; the audit step itself still runs.
+      fail-on-audit: false
+      # Fixture has no deny.toml; exercising cargo-audit is enough.
+      run-cargo-deny: false
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+        cargo generate-lockfile
+
+  perf-smoke:
+    needs: actionlint
+    uses: ./.github/workflows/perf-smoke.yml
+    with:
+      test-args: '--test perf_scaling --test perf_timeout'
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  nightly-perf:
+    needs: actionlint
+    uses: ./.github/workflows/nightly-perf.yml
+    with:
+      test-args: '--test perf_scaling --test perf_timeout'
+      bench-args: '--bench perf -- --sample-size 10 --warm-up-time 1'
+      criterion-artifact-name: self-test-criterion
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+
+  dependency-review:
+    needs: actionlint
+    # The reusable's main job is gated on github.event_name == 'pull_request';
+    # invoking it from schedule/dispatch would run nothing.
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/dependency-review.yml
+    with:
+      warn-only: true
+      enable-codex-remediation: false
+
+  codeql:
+    needs: actionlint
+    # CodeQL is slow (~5-8 min) and the signal on a tiny fixture is
+    # weak. Keep it off the PR path; run on schedule + manual dispatch
+    # to catch bumps in github/codeql-action/*.
+    if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    uses: ./.github/workflows/codeql.yml
+    with:
+      languages: rust
+      toolchain-variant: host
+      setup-script: |
+        set -euo pipefail
+        cp -a selftest/. ./
+        cargo generate-lockfile
