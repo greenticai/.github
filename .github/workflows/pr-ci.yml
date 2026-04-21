@@ -1,0 +1,285 @@
+name: PR CI (baseline)
+
+# Unified PR-time baseline: fmt + clippy + test + dependency-review + build
+# (variant-dispatched: host | wasm). This is the reusable that per-repo ci.yml
+# should call on `pull_request`. Heavy gates — semver-checks, coverage, perf,
+# Codex remediation — live in separate scheduled reusables
+# (nightly-semver-advisory.yml, nightly-coverage.yml, nightly-perf.yml,
+# nightly-audit.yml). See plans/binary-bifurcation.md Phase A.
+#
+# This reusable is additive: host-crate-ci.yml and wasm-component-ci.yml
+# are unchanged and remain the current entry points. After pr-ci.yml has
+# baked in on a handful of repos, those two will collapse into thin wrappers
+# around this workflow (plan step A.2).
+
+on:
+  workflow_call:
+    inputs:
+      variant:
+        description: "Build variant: host (native) or wasm (wasm32-wasip2)"
+        type: string
+        default: "host"
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      clippy-args:
+        description: "Arguments passed to cargo clippy"
+        type: string
+        default: ""
+      test-args:
+        description: "Arguments passed to cargo test"
+        type: string
+        default: ""
+      setup-script:
+        description: "Optional shell commands to run before checks"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+      toolchain-variant:
+        description: "Canonical toolchain variant for drift check (host or wasm)"
+        type: string
+        default: ""
+      # ── wasm-only inputs ────────────────────────────────────────────
+      use-cargo-component:
+        description: "Use 'cargo component build' instead of 'cargo build' (wasm only)"
+        type: boolean
+        default: false
+      cargo-component-version:
+        description: "cargo-component version to install (wasm only)"
+        type: string
+        default: "0.21.1"
+      wasm-check-args:
+        description: "Arguments passed to cargo check for WASM target"
+        type: string
+        default: "--target wasm32-wasip2"
+      wasm-build-args:
+        description: "Arguments passed to cargo build for WASM target"
+        type: string
+        default: "--target wasm32-wasip2 --release"
+      validate-component:
+        description: "Validate WASM output is a valid WIT component via wasm-tools"
+        type: boolean
+        default: true
+      wasm-validate-glob:
+        description: "Glob pattern for .wasm files to validate"
+        type: string
+        default: "target/wasm32-wasip2/release/*.wasm"
+      # ── dependency-review inputs ────────────────────────────────────
+      run-dependency-review:
+        description: "Run actions/dependency-review-action on PRs"
+        type: boolean
+        default: true
+      dep-review-fail-on-severity:
+        description: "Minimum CVSS severity to fail dependency-review (low, moderate, high, critical)"
+        type: string
+        default: "moderate"
+      dep-review-warn-only:
+        description: "dependency-review emits annotations only, never fails"
+        type: boolean
+        default: false
+      dep-review-allow-licenses:
+        description: "SPDX license allowlist for dependency-review (empty = no license check)"
+        type: string
+        default: ""
+      dep-review-deny-licenses:
+        description: "SPDX license denylist for dependency-review (empty = no license check)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  toolchain-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - name: Check toolchain drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          VARIANT="${{ inputs.toolchain-variant != '' && inputs.toolchain-variant || inputs.variant }}"
+          BASE="https://raw.githubusercontent.com/greenticai/.github/main/toolchain"
+
+          curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
+          curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
+
+          DRIFT=0
+          if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
+            echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
+            diff rust-toolchain.toml /tmp/canonical-toolchain.toml || true
+            DRIFT=1
+          fi
+          if ! diff -q rustfmt.toml /tmp/canonical-rustfmt.toml >/dev/null 2>&1; then
+            echo "::warning::rustfmt.toml differs from canonical"
+            diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
+            DRIFT=1
+          fi
+          # Warning-only during stabilization; upgrade to `exit $DRIFT` after rollout.
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: rustfmt
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: clippy
+          targets: ${{ inputs.variant == 'wasm' && 'wasm32-wasip2' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - name: Resolve clippy args
+        id: clippy_args
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIPPY_ARGS="${{ inputs.clippy-args }}"
+          if [ -z "${CLIPPY_ARGS}" ]; then
+            if [ "${{ inputs.variant }}" = "wasm" ]; then
+              CLIPPY_ARGS='--workspace --all-targets -- -D warnings'
+            else
+              CLIPPY_ARGS='--workspace --all-targets --all-features -- -D warnings'
+            fi
+          fi
+          echo "args=${CLIPPY_ARGS}" >> "$GITHUB_OUTPUT"
+      - run: cargo clippy ${{ steps.clippy_args.outputs.args }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - name: Resolve test args
+        id: test_args
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_ARGS="${{ inputs.test-args }}"
+          if [ -z "${TEST_ARGS}" ]; then
+            if [ "${{ inputs.variant }}" = "wasm" ]; then
+              TEST_ARGS='--workspace --all-targets'
+            else
+              TEST_ARGS='--workspace --all-features'
+            fi
+          fi
+          echo "args=${TEST_ARGS}" >> "$GITHUB_OUTPUT"
+      - run: cargo test ${{ steps.test_args.outputs.args }}
+
+  wasm:
+    if: inputs.variant == 'wasm'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - name: Install cargo-binstall
+        if: ${{ inputs.use-cargo-component || inputs.validate-component }}
+        uses: taiki-e/install-action@cargo-binstall
+      - name: Ensure cargo bin path is on PATH
+        if: ${{ inputs.use-cargo-component || inputs.validate-component }}
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install cargo-component
+        if: ${{ inputs.use-cargo-component }}
+        run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }} --force
+      - name: Check (wasm32-wasip2)
+        run: |
+          if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
+            cargo component check ${{ inputs.wasm-check-args }}
+          else
+            cargo check ${{ inputs.wasm-check-args }}
+          fi
+      - name: Build (wasm32-wasip2, release)
+        run: |
+          if [ "${{ inputs.use-cargo-component }}" = "true" ]; then
+            cargo component build ${{ inputs.wasm-build-args }}
+          else
+            cargo build ${{ inputs.wasm-build-args }}
+          fi
+      - name: Install wasm-tools
+        if: ${{ inputs.validate-component }}
+        run: cargo binstall -y wasm-tools --force
+      - name: Validate component
+        if: ${{ inputs.validate-component }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v wasm-tools >/dev/null 2>&1 || {
+            echo "::error::wasm-tools missing from PATH=$PATH"
+            exit 127
+          }
+          count=0
+          for wasm in ${{ inputs.wasm-validate-glob }}; do
+            [ -f "$wasm" ] || continue
+            echo "Validating: $wasm"
+            wasm-tools validate "$wasm"
+            if wasm-tools component wit "$wasm" > /dev/null 2>&1; then
+              echo "  ✓ valid WIT component"
+            else
+              echo "  ✓ valid core module (not a component)"
+            fi
+            count=$((count + 1))
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No .wasm files found matching ${{ inputs.wasm-validate-glob }}"
+            exit 1
+          fi
+          echo "Validated $count module(s)"
+
+  dependency-review:
+    if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - name: Run dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.dep-review-fail-on-severity }}
+          warn-only: ${{ inputs.dep-review-warn-only }}
+          allow-licenses: ${{ inputs.dep-review-allow-licenses }}
+          deny-licenses: ${{ inputs.dep-review-deny-licenses }}
+          comment-summary-in-pr: "on-failure"
