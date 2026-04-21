@@ -33,9 +33,7 @@ name: Reusable workflows self-test
 #     to satisfy static validation would widen the test token's
 #     authority for no runtime benefit. The non-Codex path inside
 #     `dependency-review.yml` is still exercised live on every caller
-#     repo's PR, and `pr-ci.yml`'s inline (non-Codex) dep-review job
-#     is covered by the `pr-ci-host` / `pr-ci-wasm` self-test jobs
-#     below — so the signal is not lost.
+#     repo's PR, so the signal is not lost.
 #   dependabot-automerge.yml
 #     Only acts when github.actor == dependabot[bot]; a human-triggered
 #     self-test skips the only job, yielding no real signal.
@@ -70,7 +68,6 @@ permissions:
   # with no logs or annotations). Keep this block in sync with the union
   # of every `permissions:` block across the jobs below.
   contents: read
-  pull-requests: write    # pr-ci.yml's inline dep-review comment-on-failure
   security-events: write  # codeql
   actions: read           # codeql (github/codeql-action reads workflow runs)
 
@@ -110,20 +107,9 @@ jobs:
     needs: actionlint
     permissions:
       contents: read
-      pull-requests: write
     uses: ./.github/workflows/pr-ci.yml
     with:
       variant: host
-      # The dep-review sub-job inside pr-ci.yml fails on this repo with
-      # "Dependency review is not supported on this repository. Please
-      # ensure that Dependency graph is enabled" — Dependency Graph is
-      # not turned on for greenticai/.github (Settings → Security). The
-      # `warn-only` flag only converts severity-level findings to
-      # warnings; it doesn't cover "feature disabled". Skip the dep-
-      # review sub-job here — it calls a third-party action whose
-      # correctness isn't ours to validate, and every per-repo caller
-      # of pr-ci.yml still exercises the live path on real PRs.
-      run-dependency-review: false
       setup-script: |
         set -euo pipefail
         cp -a selftest/. ./
@@ -132,7 +118,6 @@ jobs:
     needs: actionlint
     permissions:
       contents: read
-      pull-requests: write
     uses: ./.github/workflows/pr-ci.yml
     with:
       variant: wasm
@@ -143,8 +128,6 @@ jobs:
       validate-component: false
       wasm-check-args: '--target wasm32-wasip2 --lib'
       wasm-build-args: '--target wasm32-wasip2 --release --lib'
-      # See pr-ci-host for the dep-review skip rationale.
-      run-dependency-review: false
       setup-script: |
         set -euo pipefail
         cp -a selftest/. ./
@@ -157,11 +140,6 @@ jobs:
     needs: actionlint
     permissions:
       contents: read
-      # Inherited by the nested pr-ci.yml call; its dep-review sub-job
-      # declares pull-requests: write even when gated off. The caller
-      # chain must have that permission available at graph-build time
-      # regardless of `if:` evaluation.
-      pull-requests: write
     uses: ./.github/workflows/host-crate-ci.yml
     with:
       run-semver-checks: true
@@ -177,11 +155,9 @@ jobs:
 
   wasm-component-ci:
     # Post-A.2 this is a thin wrapper around pr-ci.yml with variant: wasm.
-    # See host-crate-ci self-test job for the permissions rationale.
     needs: actionlint
     permissions:
       contents: read
-      pull-requests: write
     uses: ./.github/workflows/wasm-component-ci.yml
     with:
       toolchain-variant: host
@@ -255,9 +231,9 @@ jobs:
         cp -a selftest/. ./
 
   # dependency-review.yml is not self-tested live — see header rationale.
-  # actionlint still covers it via the job below. The non-Codex path is
-  # exercised indirectly by pr-ci-host / pr-ci-wasm, which internally run
-  # `pr-ci.yml`'s own dep-review job (no codex dependency).
+  # actionlint still covers it via the job below. Every per-repo caller
+  # invokes dependency-review.yml directly on real PRs, exercising the
+  # non-Codex path end-to-end in production.
 
   codeql:
     needs: actionlint

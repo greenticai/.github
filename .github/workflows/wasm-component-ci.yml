@@ -62,19 +62,10 @@ permissions:
 jobs:
   pr-ci:
     # Delegate fmt/clippy/test/wasm/toolchain-check to the unified PR-CI
-    # baseline. `run-dependency-review: false` preserves parity with this
-    # workflow's pre-A.2 behavior (callers that want dep-review invoke
-    # dependency-review.yml directly).
-    #
-    # `pull-requests: write` is forwarded even though dep-review is gated
-    # off here: GitHub validates nested-reusable permissions at graph-build
-    # time, before `if:` is evaluated, so pr-ci.yml's `dependency-review`
-    # job (which statically declares `pull-requests: write`) fails startup
-    # unless the caller chain grants it. Callers still opt in via their own
-    # `permissions:` block — this line only avoids capping it back to none.
-    permissions:
-      contents: read
-      pull-requests: write
+    # baseline. pr-ci.yml no longer bundles dependency-review (it lives in
+    # dependency-review.yml, which callers invoke directly) so no extra
+    # permission forwarding is required. The call graph stays at
+    # `contents: read` end-to-end.
     uses: ./.github/workflows/pr-ci.yml
     with:
       variant: wasm
@@ -89,4 +80,3 @@ jobs:
       wasm-build-args: ${{ inputs.wasm-build-args }}
       validate-component: ${{ inputs.validate-component }}
       wasm-validate-glob: ${{ inputs.wasm-validate-glob }}
-      run-dependency-review: false
