@@ -1,16 +1,18 @@
 name: PR CI (baseline)
 
-# Unified PR-time baseline: fmt + clippy + test + dependency-review + build
-# (variant-dispatched: host | wasm). This is the reusable that per-repo ci.yml
-# should call on `pull_request`. Heavy gates — semver-checks, coverage, perf,
-# Codex remediation — live in separate scheduled reusables
+# Unified PR-time baseline: fmt + clippy + test + build (variant-dispatched:
+# host | wasm). This is the reusable that per-repo ci.yml should call on
+# `pull_request`. Heavy gates — semver-checks, coverage, perf, Codex
+# remediation — live in separate scheduled reusables
 # (nightly-semver-advisory.yml, nightly-coverage.yml, nightly-perf.yml,
 # nightly-audit.yml). See plans/binary-bifurcation.md Phase A.
 #
-# This reusable is additive: host-crate-ci.yml and wasm-component-ci.yml
-# are unchanged and remain the current entry points. After pr-ci.yml has
-# baked in on a handful of repos, those two will collapse into thin wrappers
-# around this workflow (plan step A.2).
+# Dependency review is NOT part of this reusable. It lives in
+# `dependency-review.yml` and callers invoke it separately. Including it here
+# would force every caller into the `pull-requests: write` permission cap at
+# graph-build time, even when gated off via `run-dependency-review: false` —
+# GitHub validates nested-reusable permissions before `if:` evaluation. See
+# the regression post-mortem that motivated this split (PR #94 fallout).
 
 on:
   workflow_call:
@@ -68,25 +70,30 @@ on:
         description: "Glob pattern for .wasm files to validate"
         type: string
         default: "target/wasm32-wasip2/release/*.wasm"
-      # ── dependency-review inputs ────────────────────────────────────
+      # ── dependency-review inputs (DEPRECATED no-ops) ────────────────
+      # Dependency review moved out of this reusable to avoid the graph-time
+      # permission cap issue (see header). These inputs are retained as
+      # no-ops so the ~13 existing callers (host/wasm thin wrappers + direct
+      # callers) don't need a synchronized update. Invoke
+      # `dependency-review.yml` directly for the dep-review job.
       run-dependency-review:
-        description: "Run actions/dependency-review-action on PRs"
+        description: "DEPRECATED no-op. dep-review moved to dependency-review.yml."
         type: boolean
-        default: true
+        default: false
       dep-review-fail-on-severity:
-        description: "Minimum CVSS severity to fail dependency-review (low, moderate, high, critical)"
+        description: "DEPRECATED no-op. See run-dependency-review."
         type: string
         default: "moderate"
       dep-review-warn-only:
-        description: "dependency-review emits annotations only, never fails"
+        description: "DEPRECATED no-op. See run-dependency-review."
         type: boolean
         default: false
       dep-review-allow-licenses:
-        description: "SPDX license allowlist for dependency-review (empty = no license check)"
+        description: "DEPRECATED no-op. See run-dependency-review."
         type: string
         default: ""
       dep-review-deny-licenses:
-        description: "SPDX license denylist for dependency-review (empty = no license check)"
+        description: "DEPRECATED no-op. See run-dependency-review."
         type: string
         default: ""
 
@@ -270,22 +277,3 @@ jobs:
             exit 1
           fi
           echo "Validated $count module(s)"
-
-  dependency-review:
-    if: ${{ inputs.run-dependency-review && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: ${{ inputs.checkout-submodules }}
-      - name: Run dependency review
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: ${{ inputs.dep-review-fail-on-severity }}
-          warn-only: ${{ inputs.dep-review-warn-only }}
-          allow-licenses: ${{ inputs.dep-review-allow-licenses }}
-          deny-licenses: ${{ inputs.dep-review-deny-licenses }}
-          comment-summary-in-pr: "on-failure"
