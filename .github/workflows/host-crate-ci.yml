@@ -1,5 +1,14 @@
 name: Host Crate CI
 
+# Thin wrapper around `pr-ci.yml` with `variant: host`. The fmt/clippy/test/
+# toolchain-check jobs live in pr-ci.yml; only the advisory semver-checks job
+# stays inline here because pr-ci.yml deliberately excludes it (heavy gates
+# moved to scheduled reusables per plans/binary-bifurcation.md Phase A).
+#
+# Input surface preserved verbatim for back-compat with ~30 callers. The real
+# semver gate still lives in weekly-stable-prepare (comparing against the last
+# v* tag at publish boundary); this workflow only emits an advisory warning.
+
 on:
   workflow_call:
     inputs:
@@ -43,85 +52,32 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  toolchain-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: ${{ inputs.checkout-submodules }}
-      - name: Check toolchain drift
-        run: |
-          VARIANT="${{ inputs.toolchain-variant }}"
-          BASE="https://raw.githubusercontent.com/greenticai/.github/main/toolchain"
-
-          curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
-          curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
-
-          DRIFT=0
-          if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
-            echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
-            diff rust-toolchain.toml /tmp/canonical-toolchain.toml || true
-            DRIFT=1
-          fi
-          if ! diff -q rustfmt.toml /tmp/canonical-rustfmt.toml >/dev/null 2>&1; then
-            echo "::warning::rustfmt.toml differs from canonical"
-            diff rustfmt.toml /tmp/canonical-rustfmt.toml || true
-            DRIFT=1
-          fi
-          # Silence shellcheck SC2034 during Phase-A rollout grace; see pr-ci.yml.
-          : "${DRIFT}"
-
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: ${{ inputs.checkout-submodules }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-          components: rustfmt, clippy
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: ${{ inputs.checkout-submodules }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - run: cargo clippy ${{ inputs.clippy-args }}
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: ${{ inputs.checkout-submodules }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.rust-version }}
-      - uses: Swatinem/rust-cache@v2
-      - if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-      - run: cargo test ${{ inputs.test-args }}
+  pr-ci:
+    # Delegate fmt/clippy/test/toolchain-check to the unified PR-CI baseline.
+    # `run-dependency-review: false` preserves parity with this workflow's
+    # pre-A.2 behavior (callers that want dep-review invoke dependency-review.yml
+    # directly). Wrapping into pr-ci.yml cannot add it implicitly.
+    uses: ./.github/workflows/pr-ci.yml
+    with:
+      variant: host
+      rust-version: ${{ inputs.rust-version }}
+      clippy-args: ${{ inputs.clippy-args }}
+      test-args: ${{ inputs.test-args }}
+      setup-script: ${{ inputs.setup-script }}
+      toolchain-variant: ${{ inputs.toolchain-variant }}
+      checkout-submodules: ${{ inputs.checkout-submodules }}
+      run-dependency-review: false
 
   semver-checks:
     # Advisory mode: reports breaking changes as warnings, never fails the job.
-    # The real semver gate lives in weekly-stable-prepare, which compares against
-    # the last v* tag at publish boundary. See plans/pre-release-minor-bump-lane.md.
+    # Kept inline because pr-ci.yml does not include semver-checks — the heavy
+    # semver-checks path has its own reusable (nightly-semver-advisory.yml) on
+    # a nightly schedule, but ~8 host-crate-ci.yml callers still opt into
+    # advisory mode on PR via `run-semver-checks: true`. Those callers migrate
+    # to the nightly reusable separately (binary-bifurcation.md A.4 Wave 2+).
+    # The real semver gate lives in weekly-stable-prepare, which compares
+    # against the last v* tag at publish boundary.
     if: ${{ inputs.run-semver-checks }}
     runs-on: ubuntu-latest
     steps:

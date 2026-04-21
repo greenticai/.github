@@ -150,7 +150,18 @@ jobs:
         cp -a selftest/. ./
 
   host-crate-ci:
+    # Post-A.2 this is a thin wrapper: host-crate-ci.yml delegates
+    # fmt/clippy/test/toolchain-check to pr-ci.yml internally and only keeps
+    # the advisory semver-checks job inline. Exercising this here proves the
+    # nested reusable call + input forwarding work end-to-end.
     needs: actionlint
+    permissions:
+      contents: read
+      # Inherited by the nested pr-ci.yml call; its dep-review sub-job
+      # declares pull-requests: write even when gated off. The caller
+      # chain must have that permission available at graph-build time
+      # regardless of `if:` evaluation.
+      pull-requests: write
     uses: ./.github/workflows/host-crate-ci.yml
     with:
       run-semver-checks: true
@@ -165,7 +176,12 @@ jobs:
         cp -a selftest/. ./
 
   wasm-component-ci:
+    # Post-A.2 this is a thin wrapper around pr-ci.yml with variant: wasm.
+    # See host-crate-ci self-test job for the permissions rationale.
     needs: actionlint
+    permissions:
+      contents: read
+      pull-requests: write
     uses: ./.github/workflows/wasm-component-ci.yml
     with:
       toolchain-variant: host
