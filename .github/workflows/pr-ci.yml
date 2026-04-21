@@ -113,8 +113,13 @@ jobs:
           curl -sL "${BASE}/${VARIANT}/rust-toolchain.toml" -o /tmp/canonical-toolchain.toml
           curl -sL "${BASE}/rustfmt.toml" -o /tmp/canonical-rustfmt.toml
 
-          # shellcheck disable=SC2034  # DRIFT is tracked during rollout; will
-          # be wired to `exit $DRIFT` after Phase A per plans/binary-bifurcation.md.
+          # DRIFT is accumulated during the Phase-A rollout grace period,
+          # ready to be wired to `exit $DRIFT` once hard-fail flips on. See
+          # plans/binary-bifurcation.md. Until then, shellcheck flags it as
+          # unused — suppress with a directive that sits IMMEDIATELY above
+          # the target (no intervening comments or blank lines, or the
+          # directive's scope is broken and SC2034 re-fires).
+          # shellcheck disable=SC2034
           DRIFT=0
           if ! diff -q rust-toolchain.toml /tmp/canonical-toolchain.toml >/dev/null 2>&1; then
             echo "::warning::rust-toolchain.toml differs from canonical ${VARIANT} variant"
