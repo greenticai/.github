@@ -329,6 +329,7 @@ org = "greenticai"
 variant = "host"
 tier = 5
 publishes = ["gtc"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on github_release)
 version-track = { from = "1.0", to = "1.1" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
