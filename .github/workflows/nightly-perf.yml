@@ -6,7 +6,7 @@ name: Nightly Perf
 #
 # Typical caller (schedule):
 #   on:
-#     schedule: [{ cron: "47 3 * * *" }]
+#     schedule: [{ cron: "33 3 * * *" }]
 #     workflow_dispatch:
 #   jobs:
 #     perf:
@@ -14,6 +14,11 @@ name: Nightly Perf
 #       with:
 #         test-args: "-p greentic-component --features cli --test perf_scaling --test perf_timeout --locked"
 #         bench-args: "-p greentic-component --features cli --bench perf --locked -- --sample-size 10"
+#       secrets: inherit
+#
+# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
+# (org-level) flows through for the on-failure notification. Without it,
+# the notify step emits a ::warning:: instead of a Slack message.
 
 on:
   workflow_call:
@@ -54,6 +59,10 @@ on:
         description: "Job timeout in minutes"
         type: number
         default: 60
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS:
+        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
+        required: false
 
 permissions:
   contents: read
@@ -62,7 +71,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+    steps:
+      - id: gate
+        uses: greenticai/.github/.github/actions/nightly-gate@main
+
   perf:
+    needs: gate
+    if: needs.gate.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -94,3 +113,14 @@ jobs:
           name: ${{ inputs.criterion-artifact-name }}
           path: ${{ inputs.criterion-artifact-path }}
           if-no-files-found: ignore
+
+  notify-failure:
+    needs: [gate, perf]
+    if: failure() && github.event_name == 'schedule'
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: nightly-perf
+      repo: ${{ github.repository }}
+      step: perf
+      error: "Nightly perf run failed — criterion guards or bench smoke regressed."
+    secrets: inherit

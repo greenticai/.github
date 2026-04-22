@@ -11,17 +11,22 @@ name: Nightly Audit
 # sibling jobs so they run regardless of audit outcome. Example:
 #
 #   on:
-#     schedule: [{ cron: "29 4 * * *" }]
+#     schedule: [{ cron: "29 3 * * *" }]
 #     workflow_dispatch:
 #   jobs:
 #     audit:
 #       uses: greenticai/.github/.github/workflows/nightly-audit.yml@main
+#       secrets: inherit
 #     codex-security:
 #       uses: greenticai/.github/.github/workflows/codex-security-fix.yml@main
 #       secrets: inherit
 #     codex-semver:
 #       uses: greenticai/.github/.github/workflows/codex-semver-fix.yml@main
 #       secrets: inherit
+#
+# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
+# (org-level) flows through for the on-failure notification. Without it,
+# the notify step emits a ::warning:: instead of a Slack message.
 
 on:
   workflow_call:
@@ -70,6 +75,10 @@ on:
         description: "Job timeout in minutes"
         type: number
         default: 20
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS:
+        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
+        required: false
 
 permissions:
   contents: read
@@ -78,7 +87,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+    steps:
+      - id: gate
+        uses: greenticai/.github/.github/actions/nightly-gate@main
+
   audit:
+    needs: gate
+    if: needs.gate.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -167,3 +186,14 @@ jobs:
               echo "| cargo-deny | disabled |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-failure:
+    needs: [gate, audit]
+    if: failure() && github.event_name == 'schedule'
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: nightly-audit
+      repo: ${{ github.repository }}
+      step: audit
+      error: "Nightly audit failed — cargo-audit or cargo-deny returned a violation."
+    secrets: inherit

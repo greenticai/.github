@@ -29,7 +29,8 @@ on:
         default: ""
     secrets:
       SLACK_WEBHOOK_RELEASE_ALERTS:
-        required: true
+        description: "Slack webhook for #ci-alerts. Optional; when empty the notify step emits a ::warning:: instead of a Slack message so nested callers don't trip a graph-build error."
+        required: false
 
 permissions: {}
 
@@ -70,13 +71,19 @@ jobs:
           echo "payload={\"text\":${text}}" >> "$GITHUB_OUTPUT"
 
       - name: Post to Slack
+        env:
+          SLACK_URL: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
         run: |
           set -euo pipefail
+          if [ -z "${SLACK_URL}" ]; then
+            echo "::warning::SLACK_WEBHOOK_RELEASE_ALERTS not provided; skipping Slack post. Pass 'secrets: inherit' from the caller workflow to enable alerts."
+            exit 0
+          fi
           response=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             -H 'Content-type: application/json' \
             --data '${{ steps.msg.outputs.payload }}' \
-            "${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}")
+            "${SLACK_URL}")
 
           if [ "$response" -ne 200 ]; then
             echo "::warning::Slack notification failed (HTTP ${response})"
