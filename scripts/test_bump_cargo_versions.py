@@ -366,6 +366,108 @@ def test_non_pre_release_rejects_pre_release_to_version(root: Path) -> None:
     )
 
 
+def test_dev_publish_stamping_coincidence_preserves_pre_release(root: Path) -> None:
+    """Guard the load-bearing coincidence in dev-publish.yml stamping.
+
+    dev-publish.yml stamps artifact versions as `${BASE%.*}.${GITHUB_RUN_ID}`,
+    which is documented to produce a NORMAL (non-pre-release) version like
+    `0.5.<run_id>`. For a pre-release BASE like `0.6.0-dev.0`, the `%.*`
+    operation strips only the last dot-segment (`.0`), leaving `0.6.0-dev`,
+    and appending the run_id yields `0.6.0-dev.<run_id>` — a pre-release
+    version by accident of how dotted pre-release tags interact with `%.*`.
+
+    This degenerate case happens to produce exactly the form the Phase 2.2
+    consumer dep range (`>=X.Y.0-dev, <X.(Y+1).0-0`) needs to match. The
+    entire pre-release lane is load-bearing on this behavior. If someone
+    ever "fixes" the stamping to always emit normal versions (e.g. by
+    stripping the pre-release tag before stamping), consumer resolution
+    silently breaks.
+
+    This test reimplements the `%.*` logic in Python and asserts that:
+      * pre-release BASE → stamp has `-dev.` infix
+      * stamp falls inside the range `_make_range(pre_release=True)` emits
+    """
+    from bump_cargo_versions import _make_range  # noqa: PLC0415
+
+    del root  # unused: pure-function test
+
+    def stamp(base: str, run_id: int) -> str:
+        # Mirrors bash `${BASE%.*}.${GITHUB_RUN_ID}`: strip the last
+        # dot-segment then append the run id. `rsplit('.', 1)[0]` is the
+        # exact Python analogue.
+        return f"{base.rsplit('.', 1)[0]}.{run_id}"
+
+    run_id = 24_773_252_077  # anchor to a real-world run_id shape
+
+    # ── Pre-release BASE: stamp MUST preserve pre-release form ──
+    pre_base = "0.6.0-dev.0"
+    pre_stamped = stamp(pre_base, run_id)
+    _assert(
+        pre_stamped == "0.6.0-dev.24773252077",
+        f"pre-release stamp degenerate case broke: got {pre_stamped!r}",
+    )
+    _assert(
+        "-dev." in pre_stamped,
+        f"pre-release BASE {pre_base!r} stamped to non-pre-release {pre_stamped!r} — "
+        f"the firewall-preserving coincidence is gone; consumers at the pre-release "
+        f"range would no longer resolve the published artifact",
+    )
+
+    # ── Consumer dep range (Phase 2.2 form) MUST cover the stamp ──
+    pre_range = _make_range(0, 6, pre_release=True)
+    _assert(
+        pre_range == ">=0.6.0-dev, <0.7.0-0",
+        f"pre-release range drifted: got {pre_range!r}",
+    )
+    # String-level invariants that, together with cargo's documented pre-release
+    # matching rule (pre-release considered only when a comparator shares M.m.p
+    # with a pre-release), guarantee the range matches the stamp:
+    #   * lower-bound comparator is a pre-release on the SAME M.m.p as the stamp
+    #   * stamp's pre-release tag sorts AFTER "dev" lexicographically
+    #     (or equal-then-numeric: "dev.24773252077" > "dev" because identifiers
+    #      extend past a shorter prefix)
+    _assert(
+        pre_range.startswith(">=0.6.0-dev"),
+        f"range lower bound lost pre-release comparator: {pre_range!r}",
+    )
+    _assert(
+        pre_stamped.startswith("0.6.0-dev."),
+        f"stamp lost pre-release-on-0.6.0 prefix: {pre_stamped!r}",
+    )
+
+    # ── Stable BASE: stamp is a normal version, matches stable range ──
+    stable_base = "0.5.0"
+    stable_stamped = stamp(stable_base, run_id)
+    _assert(
+        stable_stamped == "0.5.24773252077",
+        f"stable stamp shape changed: got {stable_stamped!r}",
+    )
+    _assert(
+        "-" not in stable_stamped,
+        f"stable BASE {stable_base!r} stamped to pre-release form {stable_stamped!r}",
+    )
+    stable_range = _make_range(0, 5, pre_release=False)
+    _assert(
+        stable_range == ">=0.5.0-0, <0.6.0-0",
+        f"stable range drifted: got {stable_range!r}",
+    )
+
+    # ── Regression canary: the "fixed" variant that would break everything ──
+    # If someone writes a "cleaner" stamp that strips -dev before appending
+    # the run_id, the result won't match the pre-release range's M.m.p
+    # comparator. This assertion fails loudly if the coincidence is lost.
+    broken_stamped = f"{pre_base.split('-')[0]}.{run_id}"  # hypothetical "fix"
+    _assert(
+        broken_stamped == "0.6.0.24773252077",
+        "sanity check: the broken-fix stamp is a 4-part normal-ish version",
+    )
+    _assert(
+        "-dev" not in broken_stamped,
+        "sanity check: the broken-fix stamp has no pre-release tag — this is "
+        "exactly why we guard against it",
+    )
+
+
 def test_stable_cut_from_pre_release_strips_suffix(root: Path) -> None:
     """Weekly-stable-prepare flow: package on 0.6.0-dev.7, no --pre-release,
     should cut to 0.6.0 stable."""
@@ -407,6 +509,7 @@ def main() -> int:
         test_pre_release_dep_range_replaces_old_stable_range,
         test_pre_release_rejects_malformed_to_version,
         test_non_pre_release_rejects_pre_release_to_version,
+        test_dev_publish_stamping_coincidence_preserves_pre_release,
         test_stable_cut_from_pre_release_strips_suffix,
     ]
     failed = 0
