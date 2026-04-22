@@ -27,6 +27,16 @@ on:
         required: false
         type: string
         default: ""
+      details:
+        description: "Additional multiline details to append to the message"
+        required: false
+        type: string
+        default: ""
+      job-url:
+        description: "Direct link to the failed job"
+        required: false
+        type: string
+        default: ""
     secrets:
       SLACK_WEBHOOK_RELEASE_ALERTS:
         description: "Slack webhook for #ci-alerts. Optional; when empty the notify step emits a ::warning:: instead of a Slack message so nested callers don't trip a graph-build error."
@@ -48,6 +58,8 @@ jobs:
           tier="${{ inputs.tier }}"
           step="${{ inputs.step }}"
           error="${{ inputs.error }}"
+          details="${{ inputs.details }}"
+          job_url="${{ inputs.job-url }}"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           text=":red_circle: *${{ inputs.workflow-name }}* failed"
@@ -63,6 +75,12 @@ jobs:
           fi
           if [ -n "$error" ]; then
             text="${text}\n*Error:* ${error}"
+          fi
+          if [ -n "$details" ]; then
+            text="${text}\n${details}"
+          fi
+          if [ -n "$job_url" ]; then
+            text="${text}\n*Failed job:* <${job_url}|Open failed downstream job>"
           fi
           text="${text}\n*Run:* <${run_url}|View workflow run>"
 

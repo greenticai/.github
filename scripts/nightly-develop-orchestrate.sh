@@ -38,12 +38,67 @@ failed=0
 halted=false
 lower_tier_published=false
 published_names=""
+first_failed_repo=""
+first_failed_tier=""
+first_failed_job_name=""
+first_failed_job_url=""
+first_failure_error=""
+declare -a failure_lines=()
 
 # ── Helpers ──────────────────────────────────────────────────────
 
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
 warn() { echo "::warning::$1"; }
+
+record_failure() {
+  local repo="$1"
+  local tier="$2"
+  local error="$3"
+  local job_name="${4:-}"
+  local job_url="${5:-}"
+
+  [[ -n "$first_failure_error" ]] && return 0
+
+  first_failed_repo="$repo"
+  first_failed_tier="$tier"
+  first_failed_job_name="$job_name"
+  first_failed_job_url="$job_url"
+  first_failure_error="$error"
+}
+
+append_failure_line() {
+  local repo="$1"
+  local tier="$2"
+  local error="$3"
+  local job_name="${4:-}"
+  local job_url="${5:-}"
+
+  local line="- ${repo}"
+  [[ -n "$tier" ]] && line="${line} (tier ${tier})"
+
+  if [[ -n "$job_url" ]]; then
+    local label="${job_name:-failed job}"
+    line="${line}: <${job_url}|${label}>"
+  fi
+
+  line="${line} — ${error}"
+  failure_lines+=("$line")
+}
+
+get_failed_job_details() {
+  local repo="$1"
+  local run_id="$2"
+
+  gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" \
+    --jq '(
+        [.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required" or .conclusion == "startup_failure")]
+        + [.jobs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "failure" and .conclusion != "timed_out" and .conclusion != "action_required" and .conclusion != "startup_failure")]
+      )
+      | .[0]?
+      | [.name, (.id | tostring), .conclusion]
+      | @tsv' 2>/dev/null | head -n 1
+}
 
 # ── Change detection ─────────────────────────────────────────────
 # Returns 0 if repo needs publishing, 1 if no changes.
@@ -224,6 +279,8 @@ process_tier() {
       log "  ▶ $name — dispatched run $run_id ($reason)"
     else
       log "  ✗ $name — dispatch failed"
+      record_failure "$full" "$tier" "Failed to dispatch downstream dev-publish workflow"
+      append_failure_line "$full" "$tier" "Failed to dispatch downstream dev-publish workflow"
       ((failed++)) || true
     fi
   done
@@ -245,15 +302,49 @@ process_tier() {
       for entry in "${to_wait[@]}"; do
         local repo="${entry%%:*}"
         local rid="${entry##*:}"
+        local status="unknown"
         local conclusion
-        conclusion=$(gh run view "$rid" --repo "$repo" \
-          --json conclusion --jq '.conclusion // "failure"' 2>/dev/null) || conclusion="failure"
-        if [[ "$conclusion" == "success" ]]; then
+        local result
+        result=$(gh run view "$rid" --repo "$repo" \
+          --json status,conclusion \
+          --jq '[.status // "", .conclusion // ""] | @tsv' 2>/dev/null) || result=$'unknown\tfailure'
+        status=$(echo "$result" | cut -f1)
+        conclusion=$(echo "$result" | cut -f2)
+
+        if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
           ((succeeded++)) || true
           lower_tier_published=true
           local n="${repo##*/}"
           published_names="${published_names:+$published_names, }$n"
         else
+          local failure_error=""
+          local failed_job_name=""
+          local failed_job_url=""
+          local job_details=""
+          local run_url="https://github.com/$repo/actions/runs/$rid"
+
+          if [[ "$status" != "completed" ]]; then
+            failure_error="Timed out waiting for downstream dev-publish run"
+            failed_job_name="workflow run"
+            failed_job_url="$run_url"
+          else
+            failure_error="Downstream dev-publish run failed with conclusion: ${conclusion:-failure}"
+            failed_job_name="workflow run"
+            failed_job_url="$run_url"
+            job_details=$(get_failed_job_details "$repo" "$rid") || true
+            if [[ -n "$job_details" ]]; then
+              local job_id=""
+              local job_conclusion=""
+              failed_job_name=$(echo "$job_details" | cut -f1)
+              job_id=$(echo "$job_details" | cut -f2)
+              job_conclusion=$(echo "$job_details" | cut -f3)
+              failed_job_url="https://github.com/$repo/actions/runs/$rid/job/$job_id"
+              failure_error="Downstream job failed with conclusion: ${job_conclusion:-failure}"
+            fi
+          fi
+
+          record_failure "$repo" "$tier" "$failure_error" "$failed_job_name" "$failed_job_url"
+          append_failure_line "$repo" "$tier" "$failure_error" "$failed_job_name" "$failed_job_url"
           ((failed++)) || true
         fi
       done
@@ -359,5 +450,18 @@ if [[ "$succeeded" -gt 0 ]]; then
 else
   echo "summary=No repos published (${skipped_no_changes} unchanged, ${skipped_no_branch} no branch)" >> "${GITHUB_OUTPUT:-/dev/null}"
 fi
+
+{
+  printf 'failed_repo=%s\n' "$first_failed_repo"
+  printf 'failed_tier=%s\n' "$first_failed_tier"
+  printf 'failed_job_name=%s\n' "$first_failed_job_name"
+  printf 'failed_job_url=%s\n' "$first_failed_job_url"
+  printf 'failure_error=%s\n' "$first_failure_error"
+  echo 'failure_details<<EOF'
+  if [[ ${#failure_lines[@]} -gt 0 ]]; then
+    printf '%s\n' "${failure_lines[@]}"
+  fi
+  echo 'EOF'
+} >> "${GITHUB_OUTPUT:-/dev/null}"
 
 [[ "$failed" -eq 0 ]]

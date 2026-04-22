@@ -28,6 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       summary: ${{ steps.run.outputs.summary }}
+      failure_details: ${{ steps.run.outputs.failure_details }}
+      failed_repo: ${{ steps.run.outputs.failed_repo }}
+      failed_tier: ${{ steps.run.outputs.failed_tier }}
+      failed_job_name: ${{ steps.run.outputs.failed_job_name }}
+      failed_job_url: ${{ steps.run.outputs.failed_job_url }}
+      failure_error: ${{ steps.run.outputs.failure_error }}
     steps:
       - uses: actions/checkout@v6
 
@@ -115,7 +121,18 @@ jobs:
     uses: ./.github/workflows/notify-failure.yml
     with:
       workflow-name: nightly-develop
-      step: orchestration
-      error: "Nightly dev-publish orchestration or lock sync failed — check the run log"
+      step: >-
+        ${{
+          needs.orchestrate.result == 'failure'
+            && 'downstream dev-publish'
+            || 'cargo-lock-sync'
+        }}
+      error: >-
+        ${{
+          needs.orchestrate.result == 'failure'
+            && 'Nightly dev-publish orchestration failed. Failed repos:'
+            || 'Nightly Cargo.lock sync failed — check the run log'
+        }}
+      details: ${{ needs.orchestrate.outputs.failure_details }}
     secrets:
       SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
