@@ -145,6 +145,7 @@ org = "greenticai"
 variant = "host"
 tier = 2
 publishes = ["greentic-flow"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -164,6 +165,7 @@ org = "greenticai"
 variant = "host"
 tier = 2
 publishes = ["greentic-sorla"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -185,6 +187,7 @@ org = "greenticai"
 variant = "host"
 tier = 3
 publishes = ["greentic-bundle-reader", "greentic-bundle"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -206,6 +209,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 4
 publishes = ["runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 exclude-crates = ["echo-secret", "component-v0-6-dummy"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -243,6 +247,7 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = ["greentic-start"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -252,6 +257,7 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = ["greentic-operator"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 exclude-crates = ["secret_name", "greentic-secrets-repro"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -271,6 +277,7 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = ["greentic-mcp-exec", "greentic-mcp"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 exclude-crates = ["greentic-mcp-adapter"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -281,6 +288,7 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = ["greentic-gui"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -290,6 +298,7 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = ["dwbase-core", "dwbase-metrics", "dwbase-engine", "dwbase-storage-sled", "dwbase-vector-hnsw", "dwbase-stream-local", "dwbase-security", "dwbase-embedder-dummy", "dwbase-swarm", "dwbase-swarm-nats", "dwbase-node", "dwbase-cli", "dwbase-pack-runner"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on cli-binaries)
 exclude-crates = ["component-dwbase"]
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
@@ -300,6 +309,7 @@ org = "greenticai"
 variant = "host"
 tier = 4
 publishes = ["greentic-dw-context", "greentic-dw-delegation", "greentic-dw-planning", "greentic-dw-reflection", "greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-workspace", "greentic-dw-runtime", "greentic-dw-cli"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -339,6 +349,7 @@ org = "greenticai"
 variant = "host"
 tier = 5
 publishes = ["greentic-dev"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow greentic-component greentic-pack --force"
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -349,6 +360,7 @@ org = "greenticai"
 variant = "host"
 tier = 5
 publishes = ["greentic-setup"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -358,6 +370,7 @@ org = "greenticai"
 variant = "host"
 tier = 5
 publishes = ["greentic-provision-core", "greentic-provision"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -367,6 +380,7 @@ org = "greenticai"
 variant = "host"
 tier = 5
 publishes = ["greentic-deployer"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on publish-version-release)
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
