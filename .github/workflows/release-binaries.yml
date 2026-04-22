@@ -195,7 +195,7 @@ jobs:
         with:
           pattern: release-binaries-*
           merge-multiple: true
-          path: dist
+          path: .dist-staging
 
       - name: Ensure GitHub release exists
         env:
@@ -223,7 +223,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(dist/*)
+          files=(.dist-staging/*.tgz .dist-staging/*.zip .dist-staging/*.sha256)
           if [[ ${#files[@]} -eq 0 ]]; then
             echo "::error::No archives found in dist/"
             exit 1
@@ -240,7 +240,7 @@ jobs:
         with:
           pattern: release-binaries-*
           merge-multiple: true
-          path: dist
+          path: .dist-staging
 
       - uses: oras-project/setup-oras@v1
 
@@ -261,7 +261,7 @@ jobs:
           set -euo pipefail
           version="${TAG#v}"
           repo_lower="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
-          for asset in dist/*; do
+          for asset in .dist-staging/*.tgz .dist-staging/*.zip .dist-staging/*.sha256; do
             [ -f "$asset" ] || continue
             filename="$(basename "$asset")"
             safe_filename="$(printf '%s' "$filename" | tr '/:' '--')"
