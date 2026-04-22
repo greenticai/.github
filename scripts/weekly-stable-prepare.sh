@@ -100,11 +100,13 @@ get_last_stable_tag() {
 }
 
 # ── Version reading ──────────────────────────────────────────────
-# Reads workspace.package.version or package.version from Cargo.toml on main.
-get_current_version() {
+# Reads workspace.package.version or package.version from Cargo.toml on a
+# specific branch (default: main).
+get_version_on_branch() {
   local repo="$1"
+  local branch="${2:-main}"
 
-  gh api "repos/$repo/contents/Cargo.toml" --jq '.content' 2>/dev/null \
+  gh api "repos/$repo/contents/Cargo.toml?ref=$branch" --jq '.content' 2>/dev/null \
     | base64 -d \
     | python3 -c "
 import sys, tomllib
@@ -119,6 +121,11 @@ else:
 "
 }
 
+# Backwards-compat wrapper for the patch-bump path.
+get_current_version() {
+  get_version_on_branch "$1" "main"
+}
+
 # ── Patch bump ───────────────────────────────────────────────────
 # 0.4.58 → 0.4.59
 bump_patch() {
@@ -126,6 +133,29 @@ bump_patch() {
   local major minor patch
   IFS='.' read -r major minor patch <<< "$ver"
   echo "$major.$minor.$((patch + 1))"
+}
+
+# ── Pre-release detection + stripping ────────────────────────────
+# A pre-release version has -dev/-alpha/-beta/-rc suffix. Presence of the
+# suffix on develop is the intent signal from start-next-minor.sh that this
+# repo wants to cut a new minor. Weekly-stable-prepare honors that signal by
+# branching from develop, stripping the suffix, and opening a release PR to
+# main. Consumers at `^X.Y` will not have seen the pre-release on CodeArtifact
+# (cargo firewall), so the minor cut is their first exposure to the new line.
+is_pre_release_version() {
+  [[ "$1" == *-dev.* || "$1" == *-alpha.* || "$1" == *-beta.* || "$1" == *-rc.* ]]
+}
+
+# Strip the pre-release suffix: 0.6.0-dev.3 → 0.6.0
+strip_pre_release() {
+  echo "${1%%-*}"
+}
+
+# Compare branches: returns "ahead" | "behind" | "identical" | "diverged".
+# "ahead" means the first branch is strictly ahead of the second.
+compare_branches() {
+  local repo="$1" head="$2" base="$3"
+  gh api "repos/$repo/compare/$base...$head" --jq '.status' 2>/dev/null || echo ""
 }
 
 # ── Change detection ─────────────────────────────────────────────
@@ -179,29 +209,79 @@ prepare_release() {
     return 1
   }
 
+  # 2b. Read develop's version (if the branch exists) to detect whether the
+  # repo is in a pre-release minor-bump cycle. Missing develop → patch path.
+  local develop_ver=""
+  develop_ver=$(get_version_on_branch "$repo" "develop" 2>/dev/null || echo "")
+
   # 3. Find latest stable release tag
   local last_tag
   last_tag=$(get_last_stable_tag "$repo")
 
-  # 4. Change detection
+  # 4. Classify release kind based on develop's version.
+  #   - minor cut: develop is on X.Y.Z-dev.N (start-next-minor.sh ran).
+  #                Branch from develop, strip suffix → release vX.Y.Z.
+  #   - patch cut: develop is stable (or missing). Branch from main, bump patch.
+  local release_kind="patch"
+  local source_branch="main"
+  local source_current_ver="$current_ver"
+  local next_ver
+  if [[ -n "$develop_ver" ]] && is_pre_release_version "$develop_ver"; then
+    release_kind="minor"
+    source_branch="develop"
+    source_current_ver="$develop_ver"
+    next_ver=$(strip_pre_release "$develop_ver")
+
+    # Guard: develop must be a superset of main (forward-port race). If main
+    # is ahead or diverged, the minor cut would drop main-only commits.
+    local status
+    status=$(compare_branches "$repo" "develop" "main")
+    case "$status" in
+      ahead|identical)
+        : # develop has everything main has; safe to branch from develop
+        ;;
+      behind)
+        err "$name — develop is BEHIND main (forward-port needed before minor cut)"
+        ((failed++)) || true
+        return 1
+        ;;
+      diverged)
+        err "$name — develop has DIVERGED from main (forward-port needed before minor cut)"
+        ((failed++)) || true
+        return 1
+        ;;
+      "")
+        err "$name — could not compare develop vs main (API error)"
+        ((failed++)) || true
+        return 1
+        ;;
+      *)
+        err "$name — unexpected compare status '$status'"
+        ((failed++)) || true
+        return 1
+        ;;
+    esac
+  else
+    next_ver=$(bump_patch "$current_ver")
+  fi
+  local release_branch="release/v$next_ver"
+
+  # 4b. Change detection. For patch cuts: commits on main since last tag.
+  # For minor cuts: we unconditionally want to release (the pre-release
+  # suffix IS the intent signal), but still log the delta for visibility.
   if [[ -n "$last_tag" ]]; then
     local commit_count
     commit_count=$(commits_since_tag "$repo" "$last_tag")
 
-    if [[ "$commit_count" == "0" ]]; then
+    if [[ "$release_kind" == "patch" && "$commit_count" == "0" ]]; then
       log "  ⊘ $name — no changes since $last_tag"
       ((skipped_no_changes++)) || true
       return 0
     fi
-    log "  Δ $name — $commit_count commit(s) since $last_tag"
+    log "  Δ $name — $commit_count commit(s) since $last_tag (release kind: $release_kind)"
   else
-    log "  Δ $name — no previous stable tag (first release)"
+    log "  Δ $name — no previous stable tag (first release, kind: $release_kind)"
   fi
-
-  # 5. Compute next version
-  local next_ver
-  next_ver=$(bump_patch "$current_ver")
-  local release_branch="release/v$next_ver"
 
   # Defense-in-depth: computed next version must be strictly greater than
   # the last reachable stable tag. With the reachability filter above this
@@ -220,18 +300,23 @@ prepare_release() {
 
   # ── Dry run stops here ──
   if [[ "$DRY_RUN" == "true" ]]; then
-    log "  [dry-run] $name — would create PR: v$current_ver → v$next_ver (crates: $crates)"
+    if [[ "$release_kind" == "minor" ]]; then
+      log "  [dry-run] $name — would create MINOR cut PR: from develop ($develop_ver → $next_ver), crates: $crates"
+    else
+      log "  [dry-run] $name — would create patch PR: v$current_ver → v$next_ver (crates: $crates)"
+    fi
     ((prepared++)) || true
     return 0
   fi
 
-  # 6. Create release branch from main HEAD
-  local main_sha
-  main_sha=$(gh api "repos/$repo/git/ref/heads/main" --jq '.object.sha' 2>/dev/null) || {
-    err "$name — could not get main HEAD SHA"
+  # 6. Create release branch from source_branch HEAD
+  local source_sha
+  source_sha=$(gh api "repos/$repo/git/ref/heads/$source_branch" --jq '.object.sha' 2>/dev/null) || {
+    err "$name — could not get $source_branch HEAD SHA"
     ((failed++)) || true
     return 1
   }
+  local main_sha="$source_sha"
 
   # Create branch via API. Idempotent: if the ref already exists from a
   # partial run we reuse it. But we must NOT blindly treat every failure
@@ -265,19 +350,41 @@ prepare_release() {
     return 1
   fi
 
-  # Bump version in all Cargo.toml files (workspace + member crates)
+  # Bump version in all Cargo.toml files (workspace + member crates).
+  # For minor cut: source Cargo.toml has $develop_ver; rewrite to $next_ver.
+  # For patch cut: source Cargo.toml has $current_ver (= main's version).
   local bumped=0
   while IFS= read -r -d '' cargo_file; do
-    if grep -q "version = \"$current_ver\"" "$cargo_file"; then
-      sed -i "s/version = \"$current_ver\"/version = \"$next_ver\"/g" "$cargo_file"
+    if grep -q "version = \"$source_current_ver\"" "$cargo_file"; then
+      sed -i "s/version = \"$source_current_ver\"/version = \"$next_ver\"/g" "$cargo_file"
       ((bumped++)) || true
     fi
   done < <(find "$tmpdir" -name Cargo.toml -not -path '*/target/*' -print0)
 
   if [[ "$bumped" -eq 0 ]]; then
-    warn "$name — no Cargo.toml files contained version $current_ver"
+    warn "$name — no Cargo.toml files contained version $source_current_ver"
     ((failed++)) || true
     return 1
+  fi
+
+  # For minor cut: also rewrite greentic-ecosystem dep reqs back to a stable
+  # range form (">=X.Y.0-0, <X.(Y+1).0-0"). Develop's Cargo.toml carries the
+  # pre-release range (">=X.Y.0-dev, <X.(Y+1).0-0") to resolve pre-release
+  # artifacts from CodeArtifact; main must not carry that form because it
+  # would (a) prefer pre-releases over stable and (b) fail `cargo publish`
+  # validation against crates.io (no pre-release version of the ecosystem
+  # crate exists there). Delegate the rewrite to bump_cargo_versions.py,
+  # which is structure-aware.
+  if [[ "$release_kind" == "minor" ]]; then
+    local cut_major cut_minor _cut_patch
+    IFS='.' read -r cut_major cut_minor _cut_patch <<< "$next_ver"
+    local from_mm="$cut_major.$cut_minor"
+    # Re-run with --from <X.Y> --to <X.Y> --deps-only to rewrite any
+    # pre-release dep ranges to stable range form. bump_cargo_versions.py
+    # will match both ">=X.Y.0-0" and ">=X.Y.0-dev" as the lower bound.
+    python3 "$(dirname "$0")/bump_cargo_versions.py" \
+      --from "$from_mm" --to "$from_mm" --deps-only \
+      "$tmpdir" 2>&1 | sed 's/^/      /' || true
   fi
 
   # Commit and push
@@ -300,10 +407,12 @@ prepare_release() {
     return 1
   }
 
-  # 8. Generate changelog
+  # 8. Generate changelog. Compare against the source branch ("develop" for
+  # minor cut, "main" for patch cut) so the changelog covers everything the
+  # PR brings in.
   local changelog=""
   if [[ -n "$last_tag" ]]; then
-    changelog=$(gh api "repos/$repo/compare/$last_tag...main" \
+    changelog=$(gh api "repos/$repo/compare/$last_tag...$source_branch" \
       --jq '[.commits[] | "- " + (.commit.message | split("\n")[0]) + " (\(.sha[0:7]))"] | join("\n")' \
       2>/dev/null) || changelog="_(could not generate changelog)_"
   else
@@ -314,6 +423,13 @@ prepare_release() {
   ensure_release_label "$repo"
 
   # 10. Create PR
+  local kind_line=""
+  local from_ver_display="$current_ver"
+  if [[ "$release_kind" == "minor" ]]; then
+    kind_line="**Release kind:** minor cut (from develop@\`$develop_ver\`, suffix stripped)"
+    from_ver_display="$develop_ver"
+  fi
+
   local pr_body
   if [[ -n "$crates" ]]; then
     local crate_list
@@ -322,9 +438,10 @@ prepare_release() {
     pr_body=$(cat <<BODY
 ## Release v$next_ver
 
-**Version:** \`$current_ver\` → \`$next_ver\`
+**Version:** \`$from_ver_display\` → \`$next_ver\`
 **Tier:** $tier
 **Crates:** $(echo "$crates" | wc -w | tr -d ' ')
+$kind_line
 
 ### Crates to publish
 $crate_list
@@ -340,9 +457,10 @@ BODY
     pr_body=$(cat <<BODY
 ## Release v$next_ver
 
-**Version:** \`$current_ver\` → \`$next_ver\`
+**Version:** \`$from_ver_display\` → \`$next_ver\`
 **Tier:** $tier
 **Type:** Tag only (no crates.io publish)
+$kind_line
 
 ### Changes since ${last_tag:-"(initial)"}
 $changelog
@@ -353,9 +471,12 @@ BODY
 )
   fi
 
+  local pr_title="release: v$next_ver"
+  [[ "$release_kind" == "minor" ]] && pr_title="release: v$next_ver (minor cut)"
+
   local pr_url
   pr_url=$(gh pr create --repo "$repo" --base main --head "$release_branch" \
-    --title "release: v$next_ver" \
+    --title "$pr_title" \
     --label "$RELEASE_LABEL" \
     --body "$pr_body" 2>&1) || {
     err "$name — PR creation failed: $pr_url"
@@ -363,7 +484,7 @@ BODY
     return 1
   }
 
-  log "  ✓ $name — $pr_url (v$current_ver → v$next_ver)"
+  log "  ✓ $name — $pr_url ($from_ver_display → v$next_ver, $release_kind)"
 
   # 11. Enable auto-merge if configured
   if [[ "$auto_merge" == "true" ]]; then
