@@ -20,6 +20,16 @@ Patch bump within a minor (writes the exact ``--to-version``)::
 Convert dep specs to range form without touching package versions::
 
     bump_cargo_versions.py --from 0.4 --to 0.5 --deps-only ./greentic-runner
+
+Pre-release lane promotion (start next minor on develop)::
+
+    bump_cargo_versions.py --from 0.5 --to 0.6 --pre-release ./greentic-types
+    # package → 0.6.0-dev.0; dep reqs → ">=0.6.0-dev, <0.7.0-0"
+
+Pre-release increment (nightly dev-publish, explicit target)::
+
+    bump_cargo_versions.py --from 0.6 --to 0.6 --pre-release \
+        --to-version 0.6.0-dev.4 ./greentic-types
 """
 
 from __future__ import annotations
@@ -117,12 +127,28 @@ def _parse_minor(ver: str) -> tuple[int, int]:
     return int(parts[0]), int(parts[1])
 
 
-def _parse_full_version(ver: str) -> tuple[int, int, int]:
-    """Parse a 'major.minor.patch' string into (major, minor, patch).
+_PRERELEASE_VERSION_RE = re.compile(
+    r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
+    r"(?:-(?P<pre>[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*))?$"
+)
 
-    Pre-release suffixes (e.g. '-dev.3') are not accepted here — use
-    --to with --to-version separately if you need them later.
+
+def _parse_full_version(ver: str, *, allow_pre_release: bool = False) -> tuple[int, int, int]:
+    """Parse a 'major.minor.patch[-prerelease]' string into (major, minor, patch).
+
+    When ``allow_pre_release`` is True, accepts SemVer pre-release suffixes like
+    ``-dev.3`` / ``-alpha.0`` and returns just the (major, minor, patch) numeric
+    triple (the suffix is preserved in the caller's raw string).
     """
+    if allow_pre_release:
+        m = _PRERELEASE_VERSION_RE.match(ver)
+        if m is None:
+            raise argparse.ArgumentTypeError(
+                "--to-version must be major.minor.patch or "
+                f"major.minor.patch-prerelease (e.g. 0.6.0-dev.0), got: {ver!r}"
+            )
+        return int(m.group("major")), int(m.group("minor")), int(m.group("patch"))
+
     parts = ver.split(".")
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
         raise argparse.ArgumentTypeError(
@@ -161,10 +187,27 @@ def _range_matches_prefix(version: str, prefix: str) -> bool:
     return bool(re.search(rf">={re.escape(prefix)}[\.\d]", version))
 
 
-def _make_range(to_major: int, to_minor: int) -> str:
-    """Build the target range string."""
+def _make_range(to_major: int, to_minor: int, *, pre_release: bool = False) -> str:
+    """Build the target range string.
+
+    Stable form (``pre_release=False``)::
+
+        ">={M}.{m}.0-0, <{M}.{m+1}.0-0"
+
+    Pre-release form (``pre_release=True``)::
+
+        ">={M}.{m}.0-dev, <{M}.{m+1}.0-0"
+
+    The lower-bound ``-dev`` token is required so Cargo's pre-release
+    matching lets consumers resolve ``{M}.{m}.0-dev.N`` from CodeArtifact
+    (per `plans/pre-release-minor-bump-lane.md`). The upper bound keeps the
+    ``-0`` terminator so consumers on the current minor's pre-release lane
+    don't auto-cascade into the *next* minor's pre-release (which Cargo
+    would otherwise accept because ``X.(m+1).0-dev.N < X.(m+1).0``).
+    """
     next_minor = to_minor + 1
-    return f">={to_major}.{to_minor}.0-0, <{to_major}.{next_minor}.0-0"
+    lower = "dev" if pre_release else "0"
+    return f">={to_major}.{to_minor}.0-{lower}, <{to_major}.{next_minor}.0-0"
 
 
 def _is_workspace_inherit(value: object) -> bool:
@@ -199,12 +242,17 @@ class Bumper:
         dry_run: bool,
         deps_only: bool = False,
         to_version: str | None = None,
+        pre_release: bool = False,
     ):
         self.from_prefix = from_prefix
-        self.to_version = to_version or f"{to_major}.{to_minor}.0"
-        self.range_spec = _make_range(to_major, to_minor)
+        default_target = (
+            f"{to_major}.{to_minor}.0-dev.0" if pre_release else f"{to_major}.{to_minor}.0"
+        )
+        self.to_version = to_version or default_target
+        self.range_spec = _make_range(to_major, to_minor, pre_release=pre_release)
         self.dry_run = dry_run
         self.deps_only = deps_only
+        self.pre_release = pre_release
         self.files_changed = 0
 
     # -- public entry point ------------------------------------------------
@@ -371,6 +419,17 @@ def main() -> None:
         help="Only convert dep specs to range format, skip version bumping",
     )
     parser.add_argument(
+        "--pre-release",
+        action="store_true",
+        help=(
+            "Target the pre-release lane: default package version is "
+            "'<to>.0-dev.0' and dep specs use the pre-release-compatible "
+            "range form '>={X}.{Y}.0-dev, <{X}.{Y+1}.0-0'. Accepts "
+            "'--to-version X.Y.Z-dev.N' for explicit pre-release targets. "
+            "See plans/pre-release-minor-bump-lane.md."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would change without modifying files",
@@ -393,7 +452,9 @@ def main() -> None:
     to_version: str | None = None
     if args.to_version is not None:
         try:
-            tv_major, tv_minor, _ = _parse_full_version(args.to_version)
+            tv_major, tv_minor, _ = _parse_full_version(
+                args.to_version, allow_pre_release=args.pre_release
+            )
         except argparse.ArgumentTypeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(2)
@@ -418,6 +479,7 @@ def main() -> None:
         dry_run=args.dry_run,
         deps_only=args.deps_only,
         to_version=to_version,
+        pre_release=args.pre_release,
     )
 
     # Walk all Cargo.toml files, skip target/ directories
