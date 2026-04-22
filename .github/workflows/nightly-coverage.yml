@@ -6,14 +6,19 @@ name: Nightly Coverage
 #
 # Typical caller (schedule):
 #   on:
-#     schedule: [{ cron: "17 3 * * *" }]
+#     schedule: [{ cron: "41 3 * * *" }]
 #     workflow_dispatch:
 #   jobs:
 #     coverage:
 #       uses: greenticai/.github/.github/workflows/nightly-coverage.yml@main
+#       secrets: inherit
 #
 # Repos with a coverage policy file pass `coverage-command: "greentic-dev coverage --policy-file coverage-policy.json"`.
 # Repos that bypass greentic-dev can pass the raw cargo-llvm-cov invocation.
+#
+# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
+# (org-level) flows through for the on-failure notification. Without it,
+# the notify step emits a ::warning:: instead of a Slack message.
 
 on:
   workflow_call:
@@ -54,6 +59,10 @@ on:
         description: "Job timeout in minutes"
         type: number
         default: 60
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS:
+        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
+        required: false
 
 permissions:
   contents: read
@@ -62,7 +71,72 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Change-gate: on a `schedule` event, short-circuits downstream jobs when
+  # HEAD SHA matches the last successful scheduled run of the same workflow.
+  # `workflow_dispatch` and first-ever runs always proceed. Inlined rather
+  # than extracted into a composite action so the reusable stays self-
+  # contained (avoids cross-repo `@main` resolution problems when the
+  # action lives in the same repo as the reusable that references it).
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+    steps:
+      - id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW: ${{ github.workflow }}
+          HEAD_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          emit() {
+            local should_run="$1"
+            local reason="$2"
+            echo "should-run=${should_run}" >> "${GITHUB_OUTPUT}"
+            {
+              echo "## Nightly gate"
+              echo ""
+              echo "- **Event:** \`${EVENT_NAME}\`"
+              echo "- **Workflow:** \`${WORKFLOW}\`"
+              echo "- **HEAD:** \`${HEAD_SHA}\`"
+              echo "- **Decision:** \`${should_run}\` — ${reason}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "gate: should-run=${should_run} (${reason})"
+          }
+
+          if [ "${EVENT_NAME}" != "schedule" ]; then
+            emit true "non-schedule event (${EVENT_NAME:-unknown}) always runs"
+            exit 0
+          fi
+
+          last_sha=$(gh run list \
+            --repo "${REPO}" \
+            --workflow "${WORKFLOW}" \
+            --status success \
+            --event schedule \
+            --limit 1 \
+            --json headSha \
+            --jq '.[0].headSha // ""' 2>/dev/null || echo "")
+
+          if [ -z "${last_sha}" ]; then
+            emit true "no prior successful scheduled run — establishing baseline"
+            exit 0
+          fi
+
+          if [ "${last_sha}" = "${HEAD_SHA}" ]; then
+            emit false "unchanged since last successful scheduled run (${last_sha})"
+            exit 0
+          fi
+
+          emit true "changed since last successful scheduled run (${last_sha} → ${HEAD_SHA})"
+
   coverage:
+    needs: gate
+    if: needs.gate.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -104,3 +178,14 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifact-path }}
           if-no-files-found: ignore
+
+  notify-failure:
+    needs: [gate, coverage]
+    if: failure() && github.event_name == 'schedule'
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: nightly-coverage
+      repo: ${{ github.repository }}
+      step: coverage
+      error: "Nightly coverage run failed — check the run log for cargo-llvm-cov output."
+    secrets: inherit

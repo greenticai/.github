@@ -8,12 +8,19 @@ name: Nightly Semver Advisory
 #
 # Per-repo callers add:
 #   on:
-#     schedule: [{ cron: "0 4 * * *" }]   # after nightly-develop tier 0 publishes
+#     schedule: [{ cron: "47 3 * * *" }]   # inside the 03:00-03:59 UTC nightly window
 #     workflow_dispatch:
+#
+# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
+# (org-level) flows through for the on-failure notification. Without it,
+# the notify step emits a ::warning:: instead of a Slack message.
 #
 # This workflow is always advisory: it never fails the job, it emits a
 # ::warning:: annotation and a step summary when a breaking delta is
 # detected. Consumers should check the run summary, not a red check.
+# Because the semver job itself never returns failure, the notify-failure
+# job only fires if the gate job or the advisory job crashes unexpectedly
+# (not on a routine breaking-delta detection).
 
 on:
   workflow_call:
@@ -38,6 +45,10 @@ on:
         description: "Checkout git submodules (false, true, or recursive)"
         type: string
         default: "false"
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS:
+        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
+        required: false
 
 permissions:
   contents: read
@@ -46,7 +57,72 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Change-gate: on a `schedule` event, short-circuits downstream jobs when
+  # HEAD SHA matches the last successful scheduled run of the same workflow.
+  # `workflow_dispatch` and first-ever runs always proceed. Inlined rather
+  # than extracted into a composite action so the reusable stays self-
+  # contained (avoids cross-repo `@main` resolution problems when the
+  # action lives in the same repo as the reusable that references it).
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+    steps:
+      - id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW: ${{ github.workflow }}
+          HEAD_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          emit() {
+            local should_run="$1"
+            local reason="$2"
+            echo "should-run=${should_run}" >> "${GITHUB_OUTPUT}"
+            {
+              echo "## Nightly gate"
+              echo ""
+              echo "- **Event:** \`${EVENT_NAME}\`"
+              echo "- **Workflow:** \`${WORKFLOW}\`"
+              echo "- **HEAD:** \`${HEAD_SHA}\`"
+              echo "- **Decision:** \`${should_run}\` — ${reason}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "gate: should-run=${should_run} (${reason})"
+          }
+
+          if [ "${EVENT_NAME}" != "schedule" ]; then
+            emit true "non-schedule event (${EVENT_NAME:-unknown}) always runs"
+            exit 0
+          fi
+
+          last_sha=$(gh run list \
+            --repo "${REPO}" \
+            --workflow "${WORKFLOW}" \
+            --status success \
+            --event schedule \
+            --limit 1 \
+            --json headSha \
+            --jq '.[0].headSha // ""' 2>/dev/null || echo "")
+
+          if [ -z "${last_sha}" ]; then
+            emit true "no prior successful scheduled run — establishing baseline"
+            exit 0
+          fi
+
+          if [ "${last_sha}" = "${HEAD_SHA}" ]; then
+            emit false "unchanged since last successful scheduled run (${last_sha})"
+            exit 0
+          fi
+
+          emit true "changed since last successful scheduled run (${last_sha} → ${HEAD_SHA})"
+
   semver-advisory:
+    needs: gate
+    if: needs.gate.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -122,3 +198,14 @@ jobs:
           if [ "${OUTCOME}" = "failure" ]; then
             echo "::warning title=Semver advisory::cargo-semver-checks detected a breaking change vs ${BASELINE_LABEL}. See job summary for details."
           fi
+
+  notify-failure:
+    needs: [gate, semver-advisory]
+    if: failure() && github.event_name == 'schedule'
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: nightly-semver-advisory
+      repo: ${{ github.repository }}
+      step: semver-advisory
+      error: "Nightly semver advisory workflow crashed — breaking-delta detection is advisory-only, so this indicates an infrastructure problem, not a semver regression."
+    secrets: inherit
