@@ -104,6 +104,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Phase 4a guard: PRs targeting main MUST NOT carry pre-release version
+  # suffixes in any Cargo.toml. Pre-release versions (-dev.N, -alpha.N,
+  # -beta.N, -rc.N) only belong on develop, where CodeArtifact publishes
+  # them for opted-in consumers. Main feeds crates.io and must stay stable.
+  # Without this guard, a developer could land 0.6.0-dev.0 on main via an
+  # accidental forward-port, shipping a broken patch lane to every consumer.
+  main-pre-release-guard:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - name: Reject pre-release versions on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Match "version = "X.Y.Z-dev.N"" (and -alpha/-beta/-rc variants)
+          # in any non-target Cargo.toml, anchored to the `version = "..."`
+          # package/workspace line. Dep-req strings like ">=0.6.0-dev, <..."
+          # are deliberately skipped — they start with a comparator, not a
+          # bare string, so the pattern won't catch them.
+          offenders=$(
+            find . -name Cargo.toml -not -path './target/*' -print0 \
+              | xargs -0 grep -HnE '^version = "[0-9]+\.[0-9]+\.[0-9]+-(dev|alpha|beta|rc)\.' \
+              || true
+          )
+          if [ -n "$offenders" ]; then
+            echo "::error title=Pre-release on main::Cargo.toml files carry a pre-release version. Main must not hold -dev/-alpha/-beta/-rc suffixes (those belong on develop)."
+            echo "$offenders"
+            echo ""
+            echo "To fix: either strip the suffix (if this is a minor cut, let weekly-stable-prepare handle it via the develop → main release PR), or target the PR at develop instead of main."
+            exit 1
+          fi
+          echo "✓ No pre-release version suffixes in Cargo.toml files"
+
   toolchain-check:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,61 @@
+name: Train Stall Monitor
+
+# Weekly scan: flag repos whose develop branch has been on a pre-release
+# lane for more than STALL_THRESHOLD_DAYS (default 30). Posts a Slack alert
+# to SLACK_WEBHOOK_RELEASE_ALERTS when stalls exist.
+#
+# Complements Phase 2 start-next-minor.sh + Phase 3 weekly-stable-prepare:
+# once a minor cycle starts, either it should close within the threshold
+# (via weekly-stable-prepare's minor cut on Monday) or a human should
+# intervene. Silent stalls erode the dev/stable decoupling.
+#
+# See plans/pre-release-minor-bump-lane.md Phase 4.
+
+on:
+  schedule:
+    - cron: '15 7 * * 1'  # Monday 07:15 UTC — after weekly-stable-prepare
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Log stalls without posting Slack alert'
+        required: false
+        type: boolean
+        default: false
+      threshold-days:
+        description: 'Stall threshold in days'
+        required: false
+        type: string
+        default: '30'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  scan:
+    name: Scan for stalled pre-release lanes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Mint GitHub App token (org-wide)
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Run monitor
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
+          STALL_THRESHOLD_DAYS: ${{ inputs.threshold-days || '30' }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run || 'false' }}
+        run: bash scripts/train-stall-monitor.sh
