@@ -525,6 +525,310 @@ greentic-runner-host = { workspace = true }
     print("OK  test_workspace_inherit_keys_preserved")
 
 
+def test_dual_role_resolves_workspace_package_inherit() -> None:
+    """Dual-role copy must inline [workspace.package.*] values over `.workspace = true`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.4.2"
+edition = "2024"
+license = "MIT"
+repository = "https://example.com/repo"
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+""",
+        )
+        _write(root, "crates/mycrate/src/main.rs", "fn main() {}\n")
+
+        _run(root, "mycrate", "--dual-role")
+
+        copy = _load(
+            root / "target" / "bifurcate" / "mycrate-dev" / "Cargo.toml"
+        )
+        pkg = copy["package"]
+        _assert(pkg["version"] == "0.4.2", f"version resolved, got {pkg['version']!r}")
+        _assert(pkg["edition"] == "2024", f"edition resolved, got {pkg['edition']!r}")
+        _assert(pkg["license"] == "MIT", "license resolved")
+        _assert(
+            pkg["repository"] == "https://example.com/repo", "repository resolved"
+        )
+        # Copy should declare itself a workspace root so cargo doesn't hunt for
+        # an ancestor workspace (which no longer exists under target/bifurcate).
+        _assert("workspace" in copy, "copy must declare [workspace]")
+    print("OK  test_dual_role_resolves_workspace_package_inherit")
+
+
+def test_dual_role_resolves_workspace_dependencies_inherit() -> None:
+    """Dual-role copy must inline [workspace.dependencies.*] values over `.workspace = true`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.5.0"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+""",
+        )
+        _write(root, "crates/mycrate/src/main.rs", "fn main() {}\n")
+
+        _run(root, "mycrate", "--dual-role")
+
+        copy = _load(
+            root / "target" / "bifurcate" / "mycrate-dev" / "Cargo.toml"
+        )
+        deps = copy["dependencies"]
+        _assert(
+            deps["anyhow"] == "1" or (isinstance(deps["anyhow"], dict) and deps["anyhow"].get("version") == "1"),
+            f"anyhow resolved to workspace value, got {deps['anyhow']!r}",
+        )
+        clap = deps["clap"]
+        _assert(
+            isinstance(clap, dict) and clap["version"] == "4.5",
+            f"clap version resolved, got {clap!r}",
+        )
+        # Merged features: local "env" + workspace "derive"
+        feats = clap.get("features")
+        _assert(
+            "env" in (feats or []),
+            f"local features must merge into resolved spec, got {feats!r}",
+        )
+    print("OK  test_dual_role_resolves_workspace_dependencies_inherit")
+
+
+def test_dual_role_strips_path_from_inherited_dep() -> None:
+    """Workspace deps with both `version` and `path` must have `path` stripped post-copy."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate", "crates/sibling"]
+
+[workspace.package]
+version = "0.1.0"
+
+[workspace.dependencies]
+sibling = { version = "0.1", path = "crates/sibling" }
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+sibling.workspace = true
+""",
+        )
+        _write(
+            root,
+            "crates/sibling/Cargo.toml",
+            """\
+[package]
+name = "sibling"
+version = "0.1.0"
+edition = "2024"
+""",
+        )
+
+        _run(root, "mycrate", "--dual-role")
+
+        copy = _load(
+            root / "target" / "bifurcate" / "mycrate-dev" / "Cargo.toml"
+        )
+        sibling = copy["dependencies"]["sibling"]
+        _assert(
+            isinstance(sibling, dict) and sibling.get("version") == "0.1",
+            f"sibling keeps version, got {sibling!r}",
+        )
+        _assert(
+            "path" not in sibling,
+            f"sibling must have `path` stripped for standalone publish, got {sibling!r}",
+        )
+    print("OK  test_dual_role_strips_path_from_inherited_dep")
+
+
+def test_dual_role_workspace_root_excludes_sibling_members() -> None:
+    """When the crate is AT the workspace root (greentic-bundle style), the copy
+    brings sibling member dirs along. They must land in [workspace].exclude so
+    cargo doesn't try to parse their dangling inheritance."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/reader"]
+
+[workspace.package]
+version = "0.5.2"
+
+[package]
+name = "mybundle"
+version.workspace = true
+edition = "2024"
+""",
+        )
+        _write(
+            root,
+            "crates/reader/Cargo.toml",
+            """\
+[package]
+name = "reader"
+version.workspace = true
+edition = "2024"
+""",
+        )
+
+        _run(root, "mybundle", "--dual-role")
+
+        copy = _load(root / "target" / "bifurcate" / "mybundle-dev" / "Cargo.toml")
+        ws = copy["workspace"]
+        _assert(
+            "crates/reader" in ws.get("exclude", []),
+            f"sibling crate must be in workspace.exclude, got {ws!r}",
+        )
+    print("OK  test_dual_role_workspace_root_excludes_sibling_members")
+
+
+def test_dual_role_fixup_escaping_readme() -> None:
+    """A sub-crate whose [package].readme points at `../../README.md` must have
+    that file pulled into the copy root and the manifest rewritten to reference
+    just the basename. Without this, cargo publish errors out because the copy
+    lives at target/bifurcate/... where the relative path no longer resolves."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.1.0"
+""",
+        )
+        _write(root, "README.md", "# Project README\n")
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+edition = "2024"
+readme = "../../README.md"
+""",
+        )
+
+        _run(root, "mycrate", "--dual-role")
+
+        copy_dir = root / "target" / "bifurcate" / "mycrate-dev"
+        _assert(
+            (copy_dir / "README.md").is_file(),
+            "escaping readme must be pulled into the copy root",
+        )
+        copy_text = (copy_dir / "Cargo.toml").read_text()
+        _assert(
+            'readme = "README.md"' in copy_text,
+            f"readme path must be rewritten to basename, got:\n{copy_text}",
+        )
+    print("OK  test_dual_role_fixup_escaping_readme")
+
+
+def test_dual_role_inherit_missing_key_errors() -> None:
+    """Inheriting a key that doesn't exist in [workspace.package] must error out."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.1.0"
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+""",
+        )
+
+        proc = _run(root, "mycrate", "--dual-role", expect_fail=True)
+        _assert(
+            "edition" in proc.stderr and "not defined" in proc.stderr,
+            f"expected clear error about missing edition, got: {proc.stderr!r}",
+        )
+    print("OK  test_dual_role_inherit_missing_key_errors")
+
+
 def main() -> int:
     test_single_crate_root()
     test_sub_crate_in_workspace()
@@ -538,6 +842,12 @@ def main() -> int:
     test_autodiscovered_idempotent()
     test_main_rs_does_not_get_bin_override()
     test_workspace_inherit_keys_preserved()
+    test_dual_role_resolves_workspace_package_inherit()
+    test_dual_role_resolves_workspace_dependencies_inherit()
+    test_dual_role_strips_path_from_inherited_dep()
+    test_dual_role_workspace_root_excludes_sibling_members()
+    test_dual_role_fixup_escaping_readme()
+    test_dual_role_inherit_missing_key_errors()
     print()
     print("all tests passed")
     return 0

@@ -41,8 +41,13 @@ import shutil
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
+
+import tomli_w
 
 EXCLUDED_PATH_PARTS = {"target", ".git", "node_modules", ".venv"}
+
+DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
 
 def find_crate_manifest(workdir: Path, crate: str, new_name: str) -> Path:
@@ -200,6 +205,9 @@ def stage_dual_role_copy(manifest: Path, new_name: str, workdir: Path) -> Path:
     """Copy the crate directory to <workdir>/target/bifurcate/<new_name>/.
 
     Returns the path to the copied Cargo.toml so the caller can rewrite it.
+    Also fixes up relative paths in [package].{readme,license-file,build} that
+    escape the crate dir (e.g. greentic-runner's `readme = "../../README.md"`
+    pointing at the workspace root).
     """
     src_dir = manifest.parent
     dest_dir = workdir / "target" / "bifurcate" / new_name
@@ -212,7 +220,179 @@ def stage_dual_role_copy(manifest: Path, new_name: str, workdir: Path) -> Path:
         return [n for n in names if n in EXCLUDED_PATH_PARTS]
 
     shutil.copytree(src_dir, dest_dir, ignore=_ignore, symlinks=True)
-    return dest_dir / "Cargo.toml"
+    copy_manifest = dest_dir / "Cargo.toml"
+    _fixup_escaping_paths(copy_manifest, src_dir)
+    return copy_manifest
+
+
+def _fixup_escaping_paths(copy_manifest: Path, original_crate_dir: Path) -> None:
+    """Copy any referenced file that escapes the crate dir into the copy root.
+
+    Sub-crate Cargo.tomls often reference workspace-level files via `../`
+    (readme, license-file, build). Once copied to target/bifurcate/<new>/,
+    those relative paths resolve to nonexistent locations. This helper pulls
+    each such file into the copy root and rewrites the manifest value to the
+    basename. Keeps the copy self-contained for cargo publish.
+    """
+    text = copy_manifest.read_text()
+    data = tomllib.loads(text)
+    pkg = data.get("package", {})
+    copy_dir = copy_manifest.parent
+
+    changed = False
+    for field in ("readme", "license-file", "build"):
+        value = pkg.get(field)
+        if not isinstance(value, str):
+            continue
+        if not value.startswith("../") and "/" not in value.split("/", 1)[0].replace(
+            "..", ""
+        ):
+            continue
+        if not value.startswith(".."):
+            continue
+        resolved = (original_crate_dir / value).resolve()
+        if not resolved.is_file():
+            continue
+        dest = copy_dir / resolved.name
+        if not dest.exists():
+            shutil.copy2(resolved, dest)
+        pattern = re.compile(
+            r'^(\s*' + re.escape(field) + r'\s*=\s*)"' + re.escape(value) + r'"',
+            re.MULTILINE,
+        )
+        new_text, count = pattern.subn(rf'\1"{resolved.name}"', text, count=1)
+        if count:
+            text = new_text
+            changed = True
+
+    if changed:
+        copy_manifest.write_text(text)
+
+
+def find_workspace_root(start: Path) -> Path | None:
+    """Walk up from start to find a Cargo.toml containing a [workspace] table.
+
+    Returns None if no workspace ancestor is found. Used to resolve
+    `.workspace = true` inheritance for dual-role copies.
+    """
+    current = start.resolve()
+    for ancestor in (current, *current.parents):
+        candidate = ancestor / "Cargo.toml"
+        if not candidate.is_file():
+            continue
+        try:
+            with candidate.open("rb") as fh:
+                data = tomllib.load(fh)
+        except (tomllib.TOMLDecodeError, OSError):
+            continue
+        if "workspace" in data:
+            return candidate
+    return None
+
+
+def _is_workspace_inherit(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("workspace") is True
+
+
+def _merge_inline_with_workspace(local: dict, resolved: Any) -> Any:
+    """Merge a local dependency spec like `{ workspace = true, features = ["x"] }`
+    with the resolved workspace spec. Local overrides except for the `workspace`
+    sentinel itself.
+
+    Strips `path` from the resolved spec: the copy lives at target/bifurcate/
+    where intra-workspace paths like `crates/foo` don't exist, and for a
+    standalone dev-lane publish the registry-resolvable `version` is what we
+    want cargo to use anyway (matches cargo's own behavior of stripping `path`
+    from path+version deps when publishing — we just have to do it earlier so
+    the manifest-load step doesn't choke on a missing directory).
+    """
+    if isinstance(resolved, str):
+        base: dict = {"version": resolved}
+    elif isinstance(resolved, dict):
+        base = dict(resolved)
+        base.pop("path", None)
+    else:
+        base = {"spec": resolved}
+    if len(local) == 1 and "workspace" in local:
+        return base
+    for key, val in local.items():
+        if key == "workspace":
+            continue
+        base[key] = val
+    return base
+
+
+def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> None:
+    """Inline-resolve `.workspace = true` keys in the copy so it's standalone-publishable.
+
+    After resolution the copy's Cargo.toml:
+      - has every `X.workspace = true` in [package] replaced with the concrete
+        value from the parent's [workspace.package.X]
+      - has every `X.workspace = true` in [dependencies]/[dev-dependencies]/
+        [build-dependencies] replaced with the parent's [workspace.dependencies.X]
+        (inline forms like `X = { workspace = true, features = [...] }` preserve
+        local overrides)
+      - has its own `[workspace]` table written back as-is; callers should ensure
+        members/exclude lists don't reference paths outside the copy if that's
+        a concern (none of the current binary crates have inner workspaces)
+
+    Note: tomli_w reformats the output; the copy is ephemeral (published once
+    and discarded), so structural correctness matters more than visual fidelity.
+    """
+    with workspace_root.open("rb") as fh:
+        ws_data = tomllib.load(fh)
+    ws_package: dict = ws_data.get("workspace", {}).get("package", {})
+    ws_deps: dict = ws_data.get("workspace", {}).get("dependencies", {})
+
+    with copy_manifest.open("rb") as fh:
+        data = tomllib.load(fh)
+
+    pkg = data.get("package", {})
+    for key, value in list(pkg.items()):
+        if _is_workspace_inherit(value):
+            if key not in ws_package:
+                sys.exit(
+                    f"error: [{copy_manifest}] package.{key} inherits from workspace "
+                    f"but [workspace.package].{key} is not defined in {workspace_root}"
+                )
+            pkg[key] = ws_package[key]
+
+    for deps_table in DEP_TABLES:
+        deps = data.get(deps_table, {})
+        for dep_name, spec in list(deps.items()):
+            if _is_workspace_inherit(spec):
+                if dep_name not in ws_deps:
+                    sys.exit(
+                        f"error: [{copy_manifest}] {deps_table}.{dep_name} inherits "
+                        f"from workspace but [workspace.dependencies].{dep_name} is "
+                        f"not defined in {workspace_root}"
+                    )
+                assert isinstance(spec, dict)
+                deps[dep_name] = _merge_inline_with_workspace(spec, ws_deps[dep_name])
+
+    # Mark the copy as its own standalone workspace root. If there are sibling
+    # Cargo.toml files under the copy (as in greentic-bundle where `crates/`
+    # subdirectories came along with the package-at-workspace-root copy), list
+    # them in workspace.exclude so cargo doesn't try to parse their now-dangling
+    # workspace inheritance.
+    copy_root = copy_manifest.parent
+    sibling_manifests: list[str] = []
+    for p in copy_root.rglob("Cargo.toml"):
+        if p == copy_manifest:
+            continue
+        rel_parts = p.relative_to(copy_root).parts
+        if any(part in EXCLUDED_PATH_PARTS for part in rel_parts):
+            continue
+        sibling_manifests.append(
+            str(p.parent.relative_to(copy_root)).replace("\\", "/")
+        )
+    workspace_block: dict[str, Any] = {}
+    if sibling_manifests:
+        workspace_block["exclude"] = sorted(sibling_manifests)
+    data["workspace"] = workspace_block
+
+    with copy_manifest.open("wb") as fh:
+        tomli_w.dump(data, fh)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -246,6 +426,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.dual_role:
         copy_manifest = stage_dual_role_copy(manifest, new_name, workdir)
         changed = rewrite_manifest(copy_manifest, args.crate, new_name)
+
+        # Resolve workspace inheritance so the copy is publishable standalone.
+        # Look up from the ORIGINAL manifest, not the copy, because the copy
+        # lives under target/bifurcate/ where there's no parent workspace.
+        ws_root = find_workspace_root(manifest.parent)
+        if ws_root is not None:
+            resolve_workspace_inheritance(copy_manifest, ws_root)
+            print(
+                f"[rewrite-binary-name] resolved workspace inheritance from {ws_root}"
+            )
+
         print(
             f"[rewrite-binary-name] staged copy at {copy_manifest.parent} "
             f"({'rewrote' if changed else 'no-op'})"
