@@ -52,6 +52,11 @@ permissions: {}
 jobs:
   notify:
     name: Post failure to Slack
+    # Temporarily mute Codex-* workflow failures — the shared Codex jobs
+    # (codex-security-fix, codex-semver-fix) are currently broken and would
+    # otherwise spam #ci-alerts every night from ~70 repos. Remove this
+    # guard once the underlying Codex failures are fixed.
+    if: ${{ !startsWith(inputs.workflow-name, 'Codex ') }}
     runs-on: ubuntu-latest
     steps:
       - name: Build message
