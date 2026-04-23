@@ -27,6 +27,14 @@ on:
         description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
         type: string
         default: ""
+      binary-crates:
+        description: "Subset of `crates` that ship a binary and must publish under the `<name>-dev` alias on the dev lane (Phase C of binary-bifurcation plan)"
+        type: string
+        default: ""
+      dual-role-binary-crates:
+        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-dev` from `target/bifurcate/<name>-dev/`"
+        type: string
+        default: ""
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
@@ -171,6 +179,73 @@ jobs:
             fi
           done
 
+      - name: Bifurcate binary crate names
+        if: inputs.binary-crates != ''
+        env:
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+        run: |
+          set -euo pipefail
+          # Install tomli_w (the script uses it to write the copy's Cargo.toml
+          # with workspace inheritance resolved). pip is pre-installed on the
+          # GitHub runner; tomli_w is a tiny pure-python package.
+          python3 -m pip install --quiet tomli-w
+          curl -fsSL -o /tmp/rewrite-binary-name.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/rewrite-binary-name.py
+          for crate in $BINARY_CRATES; do
+            dr_flag=""
+            for dr in $DUAL_ROLE; do
+              if [ "$dr" = "$crate" ]; then
+                dr_flag="--dual-role"
+                break
+              fi
+            done
+            echo "::group::Bifurcate $crate ($dr_flag)"
+            python3 /tmp/rewrite-binary-name.py \
+              --crate "$crate" --suffix dev --workdir . $dr_flag
+            echo "::endgroup::"
+          done
+
+      - name: Compute effective publish list
+        id: effective
+        env:
+          CRATES: ${{ inputs.crates }}
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+        run: |
+          set -euo pipefail
+          # Emit one line per publish operation as "<kind>\t<arg>":
+          #   pkg\t<name>       → cargo publish -p <name>
+          #   manifest\t<path>  → cargo publish --manifest-path <path>
+          # Dual-role crates emit BOTH: library (pkg) + binary (manifest copy).
+          # Binary-only crates emit only the -dev pkg.
+          is_in() {
+            local needle="$1"; shift
+            for item in "$@"; do
+              [ "$item" = "$needle" ] && return 0
+            done
+            return 1
+          }
+          # Read inputs into arrays (bash word-splitting on whitespace).
+          read -ra crates_arr <<<"$CRATES"
+          read -ra bins_arr <<<"$BINARY_CRATES"
+          read -ra dual_arr <<<"$DUAL_ROLE"
+          > /tmp/publish-list.txt
+          for crate in "${crates_arr[@]}"; do
+            if is_in "$crate" "${bins_arr[@]}"; then
+              if is_in "$crate" "${dual_arr[@]}"; then
+                printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
+                printf 'manifest\ttarget/bifurcate/%s-dev/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
+              else
+                printf 'pkg\t%s-dev\n' "$crate" >> /tmp/publish-list.txt
+              fi
+            else
+              printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
+            fi
+          done
+          echo "Effective publish list:"
+          cat /tmp/publish-list.txt
+
       - name: Dry-run publish (metadata validation)
         env:
           DEV_VERSION: ${{ steps.version.outputs.dev }}
@@ -179,15 +254,28 @@ jobs:
           # Catch Cargo.toml metadata errors (missing fields, bad readme paths,
           # invalid license/keywords/categories, file inclusion/exclusion) before
           # any real upload. --no-verify skips the build step (already covered by
-          # the build-test job). Runs per-crate since later crates depend on
-          # in-workspace crates and `cargo package` inspects the tree.
-          for crate in ${{ inputs.crates }}; do
-            echo "::group::Dry-run ${crate}"
-            cargo publish -p "${crate}" \
-              --registry corp-artifacts-greentic \
-              --dry-run --allow-dirty --no-verify
+          # the build-test job).
+          while IFS=$'\t' read -r kind arg; do
+            [ -z "$kind" ] && continue
+            echo "::group::Dry-run ${kind}=${arg}"
+            case "$kind" in
+              pkg)
+                cargo publish -p "$arg" \
+                  --registry corp-artifacts-greentic \
+                  --dry-run --allow-dirty --no-verify
+                ;;
+              manifest)
+                cargo publish --manifest-path "$arg" \
+                  --registry corp-artifacts-greentic \
+                  --dry-run --allow-dirty --no-verify
+                ;;
+              *)
+                echo "::error::Unknown publish kind: $kind"
+                exit 1
+                ;;
+            esac
             echo "::endgroup::"
-          done
+          done < /tmp/publish-list.txt
           echo "✓ Metadata OK for all crates"
 
       - name: Publish crates
@@ -196,8 +284,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          publish_crate() {
-            local crate="$1"
+          # Accepts two forms (from the effective publish list):
+          #   publish_entry pkg <crate>        → cargo publish -p <crate>
+          #   publish_entry manifest <path>    → cargo publish --manifest-path <path>
+          publish_entry() {
+            local kind="$1"
+            local arg="$2"
+            local label
+            if [ "$kind" = "manifest" ]; then
+              label="$(basename "$(dirname "$arg")")"
+            else
+              label="$arg"
+            fi
             local max_retries=3
             local delay=10
             local attempt=0
@@ -205,27 +303,34 @@ jobs:
 
             while [ "$attempt" -lt "$max_retries" ]; do
               attempt=$((attempt + 1))
-              echo "::group::Publishing ${crate} (attempt ${attempt}/${max_retries})"
+              echo "::group::Publishing ${label} (attempt ${attempt}/${max_retries})"
 
-              if output=$(cargo publish -p "${crate}" \
-                  --registry corp-artifacts-greentic \
-                  --allow-dirty --no-verify 2>&1); then
+              local cmd_ok=1
+              if [ "$kind" = "manifest" ]; then
+                output=$(cargo publish --manifest-path "$arg" \
+                    --registry corp-artifacts-greentic \
+                    --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
+              else
+                output=$(cargo publish -p "$arg" \
+                    --registry corp-artifacts-greentic \
+                    --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
+              fi
+
+              if [ "$cmd_ok" -eq 0 ]; then
                 echo "$output"
                 echo "::endgroup::"
-                echo "✓ Published ${crate} ${DEV_VERSION}"
+                echo "✓ Published ${label} ${DEV_VERSION}"
                 return 0
               fi
 
               echo "$output"
               echo "::endgroup::"
 
-              # "already exists" → treat as success (safe retry of partial run)
               if echo "$output" | grep -qiE "already exists|already uploaded|crate version .* is already uploaded"; then
-                echo "✓ ${crate} already published — skipping (idempotent)"
+                echo "✓ ${label} already published — skipping (idempotent)"
                 return 0
               fi
 
-              # Rate-limited or transient server error → retry with backoff
               if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
                 echo "⚠ Transient error, retrying in ${delay}s..."
                 sleep "$delay"
@@ -234,26 +339,28 @@ jobs:
                 continue
               fi
 
-              # Other error → fail immediately (bad metadata, auth failure, etc.)
-              echo "::error::Failed to publish ${crate}: non-retryable error"
+              echo "::error::Failed to publish ${label}: non-retryable error"
               return 1
             done
 
-            echo "::error::Failed to publish ${crate} after ${max_retries} attempts"
+            echo "::error::Failed to publish ${label} after ${max_retries} attempts"
             return 1
           }
 
-          echo "Publishing crates: ${{ inputs.crates }}"
+          echo "Effective publish list:"
+          cat /tmp/publish-list.txt
+          echo ""
           echo "Dev version: ${DEV_VERSION}"
           echo ""
 
           published=0
-          for crate in ${{ inputs.crates }}; do
-            publish_crate "$crate"
+          while IFS=$'\t' read -r kind arg; do
+            [ -z "$kind" ] && continue
+            publish_entry "$kind" "$arg"
             published=$((published + 1))
             echo "Waiting 5s for index propagation..."
             sleep 5
-          done
+          done < /tmp/publish-list.txt
 
           echo ""
-          echo "✓ All ${published} crate(s) published successfully"
+          echo "✓ All ${published} entry/entries published successfully"
