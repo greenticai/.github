@@ -40,7 +40,7 @@ org = "greenticai"
 variant = "host"
 tier = 0
 publishes = ["greentic-telemetry"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
