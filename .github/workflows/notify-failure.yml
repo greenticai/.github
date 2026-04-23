@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: ""
+      run-url:
+        description: "Override for the run link in the Slack message. Needed when this reusable is invoked from a workflow_run-triggered catch-all, where github.run_id would otherwise point at the notifier itself rather than the failed run."
+        required: false
+        type: string
+        default: ""
     secrets:
       SLACK_WEBHOOK_RELEASE_ALERTS:
         description: "Slack webhook for #ci-alerts. Optional; when empty the notify step emits a ::warning:: instead of a Slack message so nested callers don't trip a graph-build error."
@@ -60,7 +65,12 @@ jobs:
           error="${{ inputs.error }}"
           details="${{ inputs.details }}"
           job_url="${{ inputs.job-url }}"
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          run_url_override="${{ inputs.run-url }}"
+          if [ -n "$run_url_override" ]; then
+            run_url="$run_url_override"
+          else
+            run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
 
           text=":red_circle: *${{ inputs.workflow-name }}* failed"
 
