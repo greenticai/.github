@@ -6,14 +6,20 @@
 #          sync-dev-publish.sh, nightly-develop.yml, weekly-stable-*.yml
 #
 # Fields:
-#   org                   — GitHub org (greenticai | greentic-biz)
-#   variant               — Toolchain variant (host | wasm)
-#   tier                  — Dependency tier (0-8). Lower tiers publish first.
-#   publishes             — Ordered crate list for cargo publish. Empty = no publish.
-#   version-track         — { from, to } for version bumping. Omit to skip bumping.
-#   dev-publish-enabled   — Progressive rollout flag for nightly CodeArtifact builds.
-#   weekly-stable-enabled — Progressive rollout flag for weekly crates.io releases.
-#   archived              — true for read-only repos. All scripts skip these.
+#   org                      — GitHub org (greenticai | greentic-biz)
+#   variant                  — Toolchain variant (host | wasm)
+#   tier                     — Dependency tier (0-8). Lower tiers publish first.
+#   publishes                — Ordered crate list for cargo publish. Empty = no publish.
+#   version-track            — { from, to } for version bumping. Omit to skip bumping.
+#   dev-publish-enabled      — Progressive rollout flag for nightly CodeArtifact builds.
+#   weekly-stable-enabled    — Progressive rollout flag for weekly crates.io releases.
+#   archived                 — true for read-only repos. All scripts skip these.
+#   binary-crates            — Subset of `publishes` that ship a binary. On develop, each
+#                              publishes as `<name>-dev` (Phase C of binary-bifurcation).
+#                              Classification captured in .github/audits/binary-dual-role.md.
+#   dual-role-binary-crates  — Subset of `binary-crates` that ALSO publish a library under
+#                              the same `[package].name`. Library keeps publishing as `<name>`;
+#                              binary gets a sibling `<name>-dev` copy-publish.
 
 # ─── Tier 0 — Foundation ────────────────────────────────────────
 
@@ -146,6 +152,8 @@ variant = "host"
 tier = 2
 publishes = ["greentic-flow"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-flow"]
+dual-role-binary-crates = ["greentic-flow"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -166,6 +174,8 @@ variant = "host"
 tier = 2
 publishes = ["greentic-sorla"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-sorla"]
+dual-role-binary-crates = ["greentic-sorla"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -188,6 +198,8 @@ variant = "host"
 tier = 3
 publishes = ["greentic-bundle-reader", "greentic-bundle"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-bundle"]
+dual-role-binary-crates = ["greentic-bundle"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -210,6 +222,8 @@ variant = "wasm"
 tier = 4
 publishes = ["runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-runner"]
+dual-role-binary-crates = ["greentic-runner"]
 exclude-crates = ["echo-secret", "component-v0-6-dummy"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -248,6 +262,8 @@ variant = "host"
 tier = 4
 publishes = ["greentic-start"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-start"]
+dual-role-binary-crates = ["greentic-start"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -258,6 +274,8 @@ variant = "host"
 tier = 4
 publishes = ["greentic-operator"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-operator"]
+dual-role-binary-crates = ["greentic-operator"]
 exclude-crates = ["secret_name", "greentic-secrets-repro"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -278,6 +296,8 @@ variant = "host"
 tier = 4
 publishes = ["greentic-mcp-exec", "greentic-mcp"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-mcp-exec", "greentic-mcp"]
+dual-role-binary-crates = ["greentic-mcp-exec", "greentic-mcp"]
 exclude-crates = ["greentic-mcp-adapter"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -289,6 +309,8 @@ variant = "host"
 tier = 4
 publishes = ["greentic-gui"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-gui"]
+dual-role-binary-crates = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -340,6 +362,8 @@ variant = "host"
 tier = 5
 publishes = ["gtc"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on github_release)
+binary-crates = ["gtc"]
+dual-role-binary-crates = ["gtc"]  # gtc has a lib surface; dual-role avoids rewriting internal `use gtc::` imports
 version-track = { from = "1.0", to = "1.1" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -350,6 +374,8 @@ variant = "host"
 tier = 5
 publishes = ["greentic-dev"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-dev"]
+dual-role-binary-crates = ["greentic-dev"]
 setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow greentic-component greentic-pack --force"
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -361,6 +387,8 @@ variant = "host"
 tier = 5
 publishes = ["greentic-setup"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-setup"]
+dual-role-binary-crates = ["greentic-setup"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -371,6 +399,8 @@ variant = "host"
 tier = 5
 publishes = ["greentic-provision-core", "greentic-provision"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-provision"]
+dual-role-binary-crates = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
