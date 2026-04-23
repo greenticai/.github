@@ -829,6 +829,169 @@ path = "src/main.rs"
     print("OK  test_dual_role_inherit_missing_key_errors")
 
 
+def test_binstall_metadata_injected_when_absent() -> None:
+    """Crate without [package.metadata.binstall] gets a default block pointing
+    at the dev-release-binaries.yml archive layout."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-setup"
+version = "0.5.0"
+edition = "2024"
+repository = "https://github.com/greenticai/greentic-setup"
+
+[[bin]]
+name = "greentic-setup"
+path = "src/main.rs"
+""",
+        )
+        _run(root, "greentic-setup")
+        data = _load(root / "Cargo.toml")
+        binstall = data.get("package", {}).get("metadata", {}).get("binstall")
+        _assert(binstall is not None, "expected binstall block injected")
+        _assert(
+            binstall["pkg-url"]
+            == "{ repo }/releases/download/v{ version }/"
+            "{ name }-v{ version }-{ target }{ archive-suffix }",
+            f"wrong pkg-url template: {binstall.get('pkg-url')!r}",
+        )
+        _assert(
+            binstall["bin-dir"]
+            == "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }",
+            f"wrong bin-dir template: {binstall.get('bin-dir')!r}",
+        )
+        _assert(binstall["pkg-fmt"] == "tgz", f"wrong pkg-fmt: {binstall!r}")
+    print("OK  test_binstall_metadata_injected_when_absent")
+
+
+def test_binstall_injection_idempotent() -> None:
+    """Re-running after binstall injection must not duplicate or alter the block."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-provision"
+version = "0.5.0"
+edition = "2024"
+repository = "https://github.com/greenticai/greentic-provision"
+
+[[bin]]
+name = "greentic-provision"
+path = "src/main.rs"
+""",
+        )
+        _run(root, "greentic-provision")
+        first = (root / "Cargo.toml").read_text()
+        _run(root, "greentic-provision")
+        second = (root / "Cargo.toml").read_text()
+        _assert(first == second, "re-run after injection must be a no-op")
+        # Also ensure the binstall block appears exactly once.
+        _assert(
+            first.count("[package.metadata.binstall]") == 1,
+            "binstall block must appear exactly once",
+        )
+    print("OK  test_binstall_injection_idempotent")
+
+
+def test_binstall_existing_not_overwritten() -> None:
+    """Crate with custom [package.metadata.binstall] keeps its metadata untouched.
+
+    Verifies author-supplied archive URLs survive the rewrite. Distinct from
+    test_binstall_literals_not_rewritten which asserts pkg-url strings
+    containing the crate name aren't textually rewritten.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "gtc"
+version = "1.0.0"
+edition = "2024"
+
+[package.metadata.binstall]
+pkg-url = "https://custom.example.com/{ name }-{ version }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+
+[[bin]]
+name = "gtc"
+path = "src/main.rs"
+""",
+        )
+        _run(root, "gtc")
+        data = _load(root / "Cargo.toml")
+        binstall = data["package"]["metadata"]["binstall"]
+        _assert(
+            binstall["pkg-url"]
+            == "https://custom.example.com/{ name }-{ version }-{ target }.tar.gz",
+            f"author-supplied pkg-url was overwritten: {binstall.get('pkg-url')!r}",
+        )
+        _assert(
+            "bin-dir" not in binstall,
+            "must not inject bin-dir when author already set binstall metadata",
+        )
+    print("OK  test_binstall_existing_not_overwritten")
+
+
+def test_dual_role_copy_has_binstall_metadata() -> None:
+    """Staged dual-role copy must carry the injected binstall block.
+
+    This is what makes `cargo binstall <crate>-dev --registry …` resolve
+    the correct archive URL on the dev lane.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-setup"
+version = "0.5.0"
+edition = "2024"
+repository = "https://github.com/greenticai/greentic-setup"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "greentic-setup"
+path = "src/main.rs"
+""",
+        )
+        _write(root, "src/lib.rs", "")
+        _write(root, "src/main.rs", "fn main() {}\n")
+
+        _run(root, "greentic-setup", "--dual-role")
+
+        # Original stays clean — library consumers don't want dev-only binstall
+        # metadata leaking into their crates.io publishes.
+        orig = _load(root / "Cargo.toml")
+        _assert(
+            "binstall" not in orig.get("package", {}).get("metadata", {}),
+            "original library manifest must not gain binstall metadata",
+        )
+
+        copy_manifest = root / "target" / "bifurcate" / "greentic-setup-dev" / "Cargo.toml"
+        copy = _load(copy_manifest)
+        binstall = copy["package"]["metadata"]["binstall"]
+        _assert(
+            binstall["pkg-url"].endswith("-{ target }{ archive-suffix }"),
+            f"copy pkg-url missing archive-suffix template: {binstall.get('pkg-url')!r}",
+        )
+        _assert(binstall["pkg-fmt"] == "tgz", f"wrong pkg-fmt: {binstall!r}")
+    print("OK  test_dual_role_copy_has_binstall_metadata")
+
+
 def main() -> int:
     test_single_crate_root()
     test_sub_crate_in_workspace()
@@ -848,6 +1011,10 @@ def main() -> int:
     test_dual_role_workspace_root_excludes_sibling_members()
     test_dual_role_fixup_escaping_readme()
     test_dual_role_inherit_missing_key_errors()
+    test_binstall_metadata_injected_when_absent()
+    test_binstall_injection_idempotent()
+    test_binstall_existing_not_overwritten()
+    test_dual_role_copy_has_binstall_metadata()
     print()
     print("all tests passed")
     return 0
