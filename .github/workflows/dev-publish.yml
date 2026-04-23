@@ -35,6 +35,10 @@ on:
         description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-dev` from `target/bifurcate/<name>-dev/`"
         type: string
         default: ""
+    outputs:
+      version:
+        description: "Stamped dev version (e.g. '0.5.24824839949'). Consumed by dev-release-binaries.yml via needs.<job>.outputs.version in the caller."
+        value: ${{ jobs.publish.outputs.version }}
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
