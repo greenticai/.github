@@ -26,11 +26,12 @@ without touching anything.
 The rewrite intentionally does NOT touch:
   - [lib] name (Rust identifier; crate consumers use it via `use <lib_name>::`,
     so renaming would break internal imports)
-  - [package.metadata.binstall] pkg-url / bin-dir templates — these use
-    { name } placeholders that resolve at install time; literal crate-name
-    references would only matter once `cargo binstall <crate>-dev` is
-    supported on the dev lane (Phase C.5, deferred)
+  - an existing [package.metadata.binstall] table (respect whatever the crate
+    author wrote; this only injects a default block when none is present)
   - [dependencies.<crate>] sub-tables (would be a rename, not what we want)
+
+When no [package.metadata.binstall] exists, a default block is appended
+pointing at the dev-release-binaries.yml archive layout. Phase C.4.
 """
 
 from __future__ import annotations
@@ -48,6 +49,21 @@ import tomli_w
 EXCLUDED_PATH_PARTS = {"target", ".git", "node_modules", ".venv"}
 
 DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
+
+# Default [package.metadata.binstall] block injected when a crate has no
+# binstall metadata. Template variables are resolved by cargo-binstall at
+# install time: { repo } from [package].repository, { version } from the
+# crate version, { target }/{ bin }/{ binary-ext }/{ archive-suffix } from
+# the install context. Archive filename uses { name } (the package name, so
+# for the -dev alias it becomes greentic-setup-dev-…tgz) to match what
+# dev-release-binaries.yml uploads.
+BINSTALL_BLOCK = (
+    "[package.metadata.binstall]\n"
+    'pkg-url = "{ repo }/releases/download/v{ version }/'
+    '{ name }-v{ version }-{ target }{ archive-suffix }"\n'
+    'bin-dir = "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }"\n'
+    'pkg-fmt = "tgz"\n'
+)
 
 
 def find_crate_manifest(workdir: Path, crate: str, new_name: str) -> Path:
@@ -161,6 +177,11 @@ def rewrite_manifest(manifest: Path, crate: str, new_name: str) -> bool:
     # Append an explicit [[bin]] block so the renamed binary wins.
     new_text = _inject_bin_override_if_needed(new_text, manifest, crate, new_name)
 
+    # Inject default [package.metadata.binstall] pointing at the archive layout
+    # produced by dev-release-binaries.yml. Only runs if no binstall metadata
+    # is already present — crate-owned overrides win.
+    new_text = _inject_binstall_metadata_if_needed(new_text)
+
     new_data = tomllib.loads(new_text)
     rewritten = new_data.get("package", {}).get("name")
     if rewritten != new_name:
@@ -199,6 +220,23 @@ def _inject_bin_override_if_needed(
         f'path = "src/bin/{crate}.rs"\n'
     )
     return text + appended
+
+
+def _inject_binstall_metadata_if_needed(text: str) -> str:
+    """Append BINSTALL_BLOCK when no [package.metadata.binstall] already exists.
+
+    Idempotent and non-destructive: if the crate's manifest already defines any
+    [package.metadata.binstall] keys, this is a no-op (crate authors may have
+    custom archive layouts). Appending a new table header is safe even if
+    [package.metadata] already exists as an open-ended table — TOML allows
+    defining nested tables out of order.
+    """
+    data = tomllib.loads(text)
+    existing = data.get("package", {}).get("metadata", {}).get("binstall")
+    if existing:
+        return text
+    separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    return text + separator + BINSTALL_BLOCK
 
 
 def stage_dual_role_copy(manifest: Path, new_name: str, workdir: Path) -> Path:

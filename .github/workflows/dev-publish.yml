@@ -100,6 +100,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
+    outputs:
+      # Stamped dev version (e.g. "0.5.24824839949"). Consumed by
+      # dev-release-binaries.yml so the matching GitHub Release tag and
+      # archive filenames line up with what the just-published crate expects.
+      version: ${{ steps.version.outputs.dev }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
