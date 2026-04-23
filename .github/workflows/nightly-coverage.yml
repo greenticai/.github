@@ -16,9 +16,9 @@ name: Nightly Coverage
 # Repos with a coverage policy file pass `coverage-command: "greentic-dev coverage --policy-file coverage-policy.json"`.
 # Repos that bypass greentic-dev can pass the raw cargo-llvm-cov invocation.
 #
-# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
-# (org-level) flows through for the on-failure notification. Without it,
-# the notify step emits a ::warning:: instead of a Slack message.
+# Slack alerting for scheduled failures is handled by the per-repo
+# `.github/workflows/notify-scheduled-failures.yml` catch-all (option-3
+# rollout, 2026-04-23) — no inline notify-failure job here.
 
 on:
   workflow_call:
@@ -59,10 +59,6 @@ on:
         description: "Job timeout in minutes"
         type: number
         default: 60
-    secrets:
-      SLACK_WEBHOOK_RELEASE_ALERTS:
-        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
-        required: false
 
 permissions:
   contents: read
@@ -178,14 +174,3 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifact-path }}
           if-no-files-found: ignore
-
-  notify-failure:
-    needs: [gate, coverage]
-    if: failure() && github.event_name == 'schedule'
-    uses: ./.github/workflows/notify-failure.yml
-    with:
-      workflow-name: nightly-coverage
-      repo: ${{ github.repository }}
-      step: coverage
-      error: "Nightly coverage run failed — check the run log for cargo-llvm-cov output."
-    secrets: inherit

@@ -11,16 +11,14 @@ name: Nightly Semver Advisory
 #     schedule: [{ cron: "47 3 * * *" }]   # inside the 03:00-03:59 UTC nightly window
 #     workflow_dispatch:
 #
-# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
-# (org-level) flows through for the on-failure notification. Without it,
-# the notify step emits a ::warning:: instead of a Slack message.
-#
 # This workflow is always advisory: it never fails the job, it emits a
 # ::warning:: annotation and a step summary when a breaking delta is
 # detected. Consumers should check the run summary, not a red check.
-# Because the semver job itself never returns failure, the notify-failure
-# job only fires if the gate job or the advisory job crashes unexpectedly
-# (not on a routine breaking-delta detection).
+#
+# Slack alerting for scheduled failures (e.g. unexpected infrastructure
+# crash here) is handled by the per-repo
+# `.github/workflows/notify-scheduled-failures.yml` catch-all (option-3
+# rollout, 2026-04-23) — no inline notify-failure job here.
 
 on:
   workflow_call:
@@ -45,10 +43,6 @@ on:
         description: "Checkout git submodules (false, true, or recursive)"
         type: string
         default: "false"
-    secrets:
-      SLACK_WEBHOOK_RELEASE_ALERTS:
-        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
-        required: false
 
 permissions:
   contents: read
@@ -198,14 +192,3 @@ jobs:
           if [ "${OUTCOME}" = "failure" ]; then
             echo "::warning title=Semver advisory::cargo-semver-checks detected a breaking change vs ${BASELINE_LABEL}. See job summary for details."
           fi
-
-  notify-failure:
-    needs: [gate, semver-advisory]
-    if: failure() && github.event_name == 'schedule'
-    uses: ./.github/workflows/notify-failure.yml
-    with:
-      workflow-name: nightly-semver-advisory
-      repo: ${{ github.repository }}
-      step: semver-advisory
-      error: "Nightly semver advisory workflow crashed — breaking-delta detection is advisory-only, so this indicates an infrastructure problem, not a semver regression."
-    secrets: inherit

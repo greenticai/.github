@@ -24,9 +24,9 @@ name: Nightly Audit
 #       uses: greenticai/.github/.github/workflows/codex-semver-fix.yml@main
 #       secrets: inherit
 #
-# Callers should pass `secrets: inherit` so SLACK_WEBHOOK_RELEASE_ALERTS
-# (org-level) flows through for the on-failure notification. Without it,
-# the notify step emits a ::warning:: instead of a Slack message.
+# Slack alerting for scheduled failures is handled by the per-repo
+# `.github/workflows/notify-scheduled-failures.yml` catch-all (option-3
+# rollout, 2026-04-23) — no inline notify-failure job here.
 
 on:
   workflow_call:
@@ -75,10 +75,6 @@ on:
         description: "Job timeout in minutes"
         type: number
         default: 20
-    secrets:
-      SLACK_WEBHOOK_RELEASE_ALERTS:
-        description: "Slack webhook for #ci-alerts. Optional; callers should `secrets: inherit` to pass the org-level secret through."
-        required: false
 
 permissions:
   contents: read
@@ -241,14 +237,3 @@ jobs:
               echo "| cargo-deny | disabled |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-  notify-failure:
-    needs: [gate, audit]
-    if: failure() && github.event_name == 'schedule'
-    uses: ./.github/workflows/notify-failure.yml
-    with:
-      workflow-name: nightly-audit
-      repo: ${{ github.repository }}
-      step: audit
-      error: "Nightly audit failed — cargo-audit or cargo-deny returned a violation."
-    secrets: inherit
