@@ -41,7 +41,7 @@ on:
         type: string
         default: ""
       version:
-        description: "Stamped dev version (e.g. '0.5.24824839949'). Typically ${{ needs.publish.outputs.version }}."
+        description: "Stamped dev version (e.g. '0.5.24824839949'). Typically passed from the paired dev-publish job's `version` output."
         required: true
         type: string
       rust-version:
