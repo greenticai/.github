@@ -56,8 +56,8 @@ stays `gtc`, imports keep working, and a separate staged copy publishes as
 
 Four repos ship a binary via `release-binaries.yml` builds but **do not** list
 the binary crate in their manifest `publishes` field, so no `cargo publish`
-currently produces a library/binary crate on crates.io or CodeArtifact under
-the binary's name:
+currently produces a library/binary crate on crates.io under the binary's
+name (on either the stable `<crate>` or the dev `<crate>-dev` lane):
 
 | Repo | Binary crate (not in `publishes`) | Dir | lib.rs | Status |
 |---|---|---|---|---|
@@ -67,7 +67,7 @@ the binary's name:
 | greentic-qa | `greentic-qa` | `crates/qa-cli` | no | binary-only; binary not in `publishes` (libraries are) |
 
 **Follow-up (tracked, not blocking Phase C):** if any of these binaries is
-meant to be installable via `cargo install <name>-dev --registry …`, the repo's
+meant to be installable via `cargo binstall <name>-dev`, the repo's
 `publishes` list must include the binary crate name first. That's a separate
 manifest change (owner: each repo maintainer).
 
