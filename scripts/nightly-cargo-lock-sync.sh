@@ -5,21 +5,18 @@
 # manifest repo that has a develop branch and a Cargo.lock at its root:
 #
 #   1. Shallow-clone develop.
-#   2. Configure CodeArtifact (so `cargo update` can resolve new {M.m.RUN_ID}
-#      versions published earlier in this run).
-#   3. `cargo update` scoped to Greentic-owned crates from the manifest that
+#   2. `cargo update` scoped to Greentic-owned crates from the manifest that
 #      (a) appear in the repo's lock and (b) are not workspace members.
-#   4. If Cargo.lock changed: force-push to a long-lived bot branch
+#      Dev versions ({M.m.RUN_ID}) published earlier in this run resolve from
+#      crates.io with no custom registry setup.
+#   3. If Cargo.lock changed: force-push to a long-lived bot branch
 #      (`chore/nightly-cargo-update`), create a PR if none exists, and enable
 #      auto-merge.
-#   5. If auto-merge cannot be enabled (conflict / failing CI): leave PR open
+#   4. If auto-merge cannot be enabled (conflict / failing CI): leave PR open
 #      for manual resolution.
 #
 # Env expected from the calling workflow:
 #   GH_TOKEN                       — GitHub App token (owner-scoped)
-#   CODEARTIFACT_DOMAIN            — CodeArtifact domain name
-#   CODEARTIFACT_DOMAIN_OWNER      — AWS account ID
-#   AWS_REGION                     — AWS region for CodeArtifact
 
 set -uo pipefail
 
@@ -64,40 +61,6 @@ for name, entry in m.get('repos', {}).items():
 "
 }
 
-# ── Write an ephemeral .cargo/config.toml that routes crates-io → CodeArtifact
-configure_codeartifact() {
-  local repo_dir="$1"
-  local endpoint
-  endpoint=$(aws codeartifact get-repository-endpoint \
-    --domain "$CODEARTIFACT_DOMAIN" \
-    --domain-owner "$CODEARTIFACT_DOMAIN_OWNER" \
-    --repository greentic \
-    --format cargo \
-    --region "$AWS_REGION" \
-    --query repositoryEndpoint \
-    --output text)
-  local token
-  token=$(aws codeartifact get-authorization-token \
-    --domain "$CODEARTIFACT_DOMAIN" \
-    --domain-owner "$CODEARTIFACT_DOMAIN_OWNER" \
-    --region "$AWS_REGION" \
-    --query authorizationToken \
-    --output text)
-  echo "::add-mask::$token"
-  export CARGO_REGISTRIES_CORP_ARTIFACTS_GREENTIC_TOKEN="$token"
-  mkdir -p "$repo_dir/.cargo"
-  # Preserve any existing config by appending; we only add the registry
-  # definition needed to authenticate. We DO NOT add a source override —
-  # the repo's own config (if it has one) governs resolution. This makes
-  # the operation a no-op on repos that don't override crates-io, and
-  # correctly resolves Greentic deps for repos that do.
-  cat > "$repo_dir/.cargo/config.toml" <<EOF
-[registries.corp-artifacts-greentic]
-index = "sparse+${endpoint}"
-credential-provider = "cargo:token"
-EOF
-}
-
 # ── Process one repo. Sets out_status and out_pr_url.
 out_status=""
 out_pr_url=""
@@ -129,8 +92,6 @@ process_repo() {
     out_status="skipped"
     return 0
   fi
-
-  configure_codeartifact "$dir"
 
   # Which Greentic crates appear in this lock?
   local lock_crates

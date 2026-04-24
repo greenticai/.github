@@ -15,8 +15,7 @@ unyank; you cannot easily un-delete.
 
 | Symptom | Registry | First action |
 |---|---|---|
-| Crate version on crates.io shouldn't be consumed | crates.io | **Yank**, then publish forward |
-| CodeArtifact nightly pushed bad `{M.m.RUN_ID}` | CodeArtifact | **Delete** the version, then re-run nightly |
+| Crate version on crates.io shouldn't be consumed (stable or dev `{M.m.RUN_ID}`) | crates.io | **Yank**, then publish forward |
 | GitHub Release has wrong/corrupt binary | GitHub Releases | **Delete asset**, re-upload (keep tag + notes) |
 | `v{version}` tag points at wrong SHA | Git | **Force-move** tag only if no one has consumed it; otherwise publish forward |
 | Secret / credential / PII leaked in published crate | crates.io | **Yank immediately**, rotate the secret, publish forward |
@@ -28,17 +27,12 @@ unyank; you cannot easily un-delete.
 
 1. **Identify what shipped.**
    ```bash
-   # crates.io: show all published versions of a crate
+   # crates.io: show all published versions of a crate (stable + dev)
    cargo search <crate-name> --limit 1
    curl -s https://crates.io/api/v1/crates/<crate-name> | jq '.versions[] | {num, yanked, created_at}'
 
-   # CodeArtifact: list published versions
-   aws codeartifact list-package-versions \
-     --domain "$CODEARTIFACT_DOMAIN" \
-     --domain-owner "$CODEARTIFACT_DOMAIN_OWNER" \
-     --repository greentic \
-     --format cargo \
-     --package <crate-name>
+   # For dev builds, the crate name has the `-dev` suffix:
+   curl -s https://crates.io/api/v1/crates/<crate-name>-dev | jq '.versions[] | {num, yanked, created_at}'
    ```
 
 2. **Quantify blast radius.** Who consumes this crate?
@@ -109,22 +103,17 @@ cargo yank --undo --version 0.4.59 greentic-types
 
 ---
 
-## Scenario B — Bad CodeArtifact nightly publish
+## Scenario B — Bad nightly dev publish (`{M.m.RUN_ID}` on crates.io)
 
-CodeArtifact *does* allow deletion — use it when the nightly version
-is genuinely broken (not just unwanted). Unlike crates.io, CodeArtifact
-is a corporate registry with no ecosystem-stability constraint.
+Dev-lane publishes (`<crate>-dev@{M.m.RUN_ID}`) go to crates.io just
+like stable. Same rules apply: **yank, do not delete.** crates.io
+doesn't allow deletion for any crate, stable or dev-suffixed.
 
 ### Procedure
 
 ```bash
-aws codeartifact delete-package-versions \
-  --domain "$CODEARTIFACT_DOMAIN" \
-  --domain-owner "$CODEARTIFACT_DOMAIN_OWNER" \
-  --repository greentic \
-  --format cargo \
-  --package <crate-name> \
-  --versions 0.4.12345
+export CARGO_REGISTRY_TOKEN="<token-with-yank>"
+cargo yank --version 0.5.24827549070 greentic-setup-dev
 ```
 
 Then:

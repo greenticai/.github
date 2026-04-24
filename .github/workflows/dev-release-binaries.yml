@@ -2,17 +2,17 @@ name: Dev Release Binaries
 
 # Reusable workflow that builds binaries for the 6 supported targets on a
 # develop-lane commit, packages them with names matching what cargo-binstall
-# expects for the `<crate>-dev` CodeArtifact alias, creates (or reuses) a
+# expects for the `<crate>-dev` crates.io alias, creates (or reuses) a
 # prerelease GitHub Release tagged `v<dev-version>`, and uploads the archives.
 #
 # Phase C.4 of plans/binary-bifurcation.md. Pairs with dev-publish.yml (which
-# publishes the `<crate>-dev` crate to CodeArtifact) so that:
+# publishes the `<crate>-dev` crate to crates.io) so that:
 #
-#   cargo binstall <crate>-dev --registry corp-artifacts-greentic
+#   cargo binstall <crate>-dev
 #
-# resolves the binstall metadata in the CodeArtifact crate, computes the
-# archive URL from { repo } + v{ version } + { name = <crate>-dev } + { target },
-# and downloads the matching archive from this release.
+# resolves the binstall metadata in the crates.io crate, computes the archive
+# URL from { repo } + v{ version } + { name = <crate>-dev } + { target }, and
+# downloads the matching archive from this release.
 #
 # Called from per-repo caller workflows like:
 #
@@ -144,12 +144,12 @@ jobs:
             bin_suffix=".exe"
           fi
           # Archive stem uses the DEV package name so cargo-binstall's
-          # { name } substitution matches (name = <crate>-dev on CodeArtifact).
+          # { name } substitution matches (name = <crate>-dev on crates.io).
           stem="${DEV_NAME}-v${VERSION}-${TARGET}"
           mkdir -p "dist/${stem}"
           # Binary inside the archive is renamed to the dev name so
           # binstall's { bin } substitution (which reads [[bin]].name from
-          # the rewritten -dev crate on CodeArtifact) matches the file.
+          # the rewritten -dev crate on crates.io) matches the file.
           cp "target/${TARGET}/release/${BINARY}${bin_suffix}" \
              "dist/${stem}/${DEV_NAME}${bin_suffix}"
           while IFS= read -r f; do
@@ -235,7 +235,7 @@ jobs:
             gh release create "$tag" \
               --target "$SHA" \
               --title "$tag (dev build)" \
-              --notes "Automated dev-lane build from develop. Paired with \`$(gh repo view --json name -q .name)-dev@${VERSION}\` on CodeArtifact." \
+              --notes "Automated dev-lane build from develop. Paired with \`$(gh repo view --json name -q .name)-dev@${VERSION}\` on crates.io." \
               --prerelease \
               --latest=false
           fi
