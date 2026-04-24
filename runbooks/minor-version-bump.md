@@ -3,11 +3,11 @@
 Use this when a foundation crate has (or is about to have) a breaking change
 and the ecosystem needs to absorb it without a single-weekend cascade.
 
-**Core idea:** develop publishes `X.(Y+1).0-dev.N` to CodeArtifact while
-main keeps shipping `X.Y.*` patches to crates.io. Consumers opt into the
-new minor at their own pace by updating their own dep req strings. Cargo's
-pre-release matching is the adoption firewall — `^X.Y` never resolves
-`X.(Y+1).0-dev.N`.
+**Core idea:** develop publishes `X.(Y+1).0-dev.N` to crates.io (same
+registry as stable, distinct versions) while main keeps shipping `X.Y.*`
+patches. Consumers opt into the new minor at their own pace by updating
+their own dep req strings. Cargo's pre-release matching is the adoption
+firewall — `^X.Y` never resolves `X.(Y+1).0-dev.N`.
 
 **Time budget:** 10 minutes to kick off one repo. Tier-ordered cascade
 completes over 1–2 weeks across 30+ repos via ordinary weekly-stable-prepare
@@ -52,8 +52,9 @@ cuts, not a weekend sprint.
    close the PR and delete the remote branch — no state was touched on
    develop yet. If correct, merge.
 
-4. On merge, `dev-publish.yml` auto-triggers and publishes the first
-   pre-release artifact to AWS CodeArtifact. The artifact version uses the
+4. On merge, `dev-publish.yml` auto-triggers and the dev lane
+   (`dev-prepare → dev-binaries-<pkg> → dev-publish`) publishes the first
+   pre-release artifact to crates.io. The artifact version uses the
    `${BASE%.*}.${GITHUB_RUN_ID}` stamping convention, which for a
    `X.Y.Z-dev.N` base produces `X.Y.Z-dev.<run_id>` — matches the consumer
    range from step 2. See `plans/pre-release-minor-bump-lane.md` discovery
@@ -75,10 +76,10 @@ For each consumer in the cascade plan (tier order, one at a time):
    ```
    Or for already-range-form specs, replace the lower bound with `-dev`.
 
-2. Run `cargo update -p <upstream-crate>` to refresh `Cargo.lock` —
-   requires CodeArtifact auth on the workstation (only CI has it by
-   default; if stuck, let the consumer's dev-publish on develop regenerate
-   the lock).
+2. Run `cargo update -p <upstream-crate>` to refresh `Cargo.lock`.
+   Dev-lane versions live on crates.io (no custom registry auth needed);
+   if you're stuck, let the consumer's dev-publish on develop regenerate
+   the lock via the nightly Cargo.lock-sync job.
 
 3. Address any breaking-change friction (compile errors, renamed APIs,
    changed trait signatures). Land all fixes in the same PR as the dep
@@ -139,8 +140,8 @@ If the pre-release lane was started in error:
    git push --force-with-lease origin develop    # only if no consumer
                                                   # PRs reference this lane yet
    ```
-2. Delete any pre-release artifacts already published to CodeArtifact.
-   See `runbooks/rollback-bad-publish.md` → CodeArtifact scenario.
+2. Yank any pre-release artifacts already published to crates.io.
+   See `runbooks/rollback-bad-publish.md` → Scenario B (dev `{M.m.RUN_ID}`).
 3. If consumers already flipped their dep ranges to the pre-release form,
    either (a) wait for them to revert their own dep bumps, or (b) leave
    a `0.Y.0` stable published and let consumers migrate forward anyway.
@@ -165,7 +166,7 @@ If the pre-release lane was started in error:
 
 | Tier | From kickoff to stable cut |
 |---|---|
-| 0 (foundation) | Same day or 1–2 days — verify CodeArtifact publish, then first downstream adopter |
+| 0 (foundation) | Same day or 1–2 days — verify crates.io dev publish, then first downstream adopter |
 | 1–3 | 1 week — tier-by-tier adoption, nightly Cargo.lock propagation |
 | 4–8 | 1–2 weeks — leaf/business consumers, usually batched |
 
