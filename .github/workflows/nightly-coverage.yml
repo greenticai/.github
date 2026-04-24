@@ -150,16 +150,21 @@ jobs:
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
 
+      # --force: Swatinem/rust-cache restores Cargo's install-tracking
+      # metadata (~/.cargo/.crates2.json) but NOT the actual binaries under
+      # ~/.cargo/bin/. Without --force, binstall reads the stale metadata,
+      # concludes "already installed", skips — and the subsequent
+      # `cargo llvm-cov …` step fails with `no such command: llvm-cov`.
       - name: Install cargo-llvm-cov
-        run: cargo binstall -y cargo-llvm-cov
+        run: cargo binstall -y --force cargo-llvm-cov
 
       - name: Install cargo-nextest
         if: ${{ inputs.install-cargo-nextest }}
-        run: cargo binstall -y cargo-nextest
+        run: cargo binstall -y --force cargo-nextest
 
       - name: Install greentic-dev
         if: ${{ inputs.install-greentic-dev }}
-        run: cargo binstall -y greentic-dev
+        run: cargo binstall -y --force greentic-dev
 
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
