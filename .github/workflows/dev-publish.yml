@@ -40,15 +40,7 @@ on:
         description: "Stamped dev version (e.g. '0.5.24824839949'). Consumed by dev-release-binaries.yml via needs.<job>.outputs.version in the caller."
         value: ${{ jobs.publish.outputs.version }}
     secrets:
-      AWS_ACCESS_KEY_ID:
-        required: true
-      AWS_SECRET_ACCESS_KEY:
-        required: true
-      AWS_REGION:
-        required: true
-      CODEARTIFACT_DOMAIN:
-        required: true
-      CODEARTIFACT_DOMAIN_OWNER:
+      CARGO_REGISTRY_TOKEN:
         required: true
 
 permissions:
@@ -98,12 +90,10 @@ jobs:
           cargo test --workspace --all-features $excludes -- --nocapture
 
   publish:
-    name: Publish dev crates to CodeArtifact
+    name: Publish dev crates to crates.io
     needs: [build-test]
     if: always() && (needs.build-test.result == 'success' || needs.build-test.result == 'skipped')
     runs-on: ubuntu-latest
-    env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
     outputs:
       # Stamped dev version (e.g. "0.5.24824839949"). Consumed by
       # dev-release-binaries.yml so the matching GitHub Release tag and
@@ -115,43 +105,6 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Get CodeArtifact token
-        id: token
-        run: |
-          token=$(aws codeartifact get-authorization-token \
-            --domain "${{ secrets.CODEARTIFACT_DOMAIN }}" \
-            --domain-owner "${{ secrets.CODEARTIFACT_DOMAIN_OWNER }}" \
-            --region "$AWS_REGION" \
-            --query authorizationToken \
-            --output text)
-          echo "::add-mask::$token"
-          echo "CARGO_REGISTRIES_CORP_ARTIFACTS_GREENTIC_TOKEN=${token}" >> "$GITHUB_ENV"
-
-      - name: Configure CodeArtifact registry
-        run: |
-          set -euo pipefail
-          endpoint=$(aws codeartifact get-repository-endpoint \
-            --domain "${{ secrets.CODEARTIFACT_DOMAIN }}" \
-            --domain-owner "${{ secrets.CODEARTIFACT_DOMAIN_OWNER }}" \
-            --repository greentic \
-            --format cargo \
-            --region "$AWS_REGION" \
-            --query repositoryEndpoint \
-            --output text)
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<EOF
-          [registries.corp-artifacts-greentic]
-          index = "sparse+${endpoint}"
-          credential-provider = "cargo:token"
-          EOF
 
       - name: Run setup script
         if: inputs.setup-script != ''
@@ -258,6 +211,7 @@ jobs:
       - name: Dry-run publish (metadata validation)
         env:
           DEV_VERSION: ${{ steps.version.outputs.dev }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
           # Catch Cargo.toml metadata errors (missing fields, bad readme paths,
@@ -270,12 +224,10 @@ jobs:
             case "$kind" in
               pkg)
                 cargo publish -p "$arg" \
-                  --registry corp-artifacts-greentic \
                   --dry-run --allow-dirty --no-verify
                 ;;
               manifest)
                 cargo publish --manifest-path "$arg" \
-                  --registry corp-artifacts-greentic \
                   --dry-run --allow-dirty --no-verify
                 ;;
               *)
@@ -290,6 +242,7 @@ jobs:
       - name: Publish crates
         env:
           DEV_VERSION: ${{ steps.version.outputs.dev }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -317,11 +270,9 @@ jobs:
               local cmd_ok=1
               if [ "$kind" = "manifest" ]; then
                 output=$(cargo publish --manifest-path "$arg" \
-                    --registry corp-artifacts-greentic \
                     --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
               else
                 output=$(cargo publish -p "$arg" \
-                    --registry corp-artifacts-greentic \
                     --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
               fi
 
