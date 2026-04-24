@@ -1,8 +1,39 @@
 name: Dev Publish
 
+# Reusable workflow that publishes dev crates to crates.io.
+#
+# Runs AFTER dev-release-binaries.yml in the dev lane so that a failed
+# binary build prevents a broken crate from being published. The crate
+# version is pre-computed by dev-prepare.yml and passed in via `version`.
+#
+# For binary-crates this workflow runs the rewrite-binary-name.py
+# bifurcation so the crate lands on crates.io as `<crate>-dev` (or as both
+# `<crate>` library + `<crate>-dev` binary for dual-role crates).
+#
+# Caller pattern (emitted by sync-dev-publish.sh):
+#
+#   jobs:
+#     dev-prepare: { uses: .../dev-prepare.yml@main, ... }
+#     dev-binaries-<pkg>:
+#       needs: dev-prepare
+#       uses: .../dev-release-binaries.yml@main
+#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#     dev-publish:
+#       needs: [dev-prepare, dev-binaries-<pkg>]
+#       uses: .../dev-publish.yml@main
+#       with:
+#         version: ${{ needs.dev-prepare.outputs.version }}
+#         crates: ...
+#         binary-crates: ...
+#       secrets: inherit
+
 on:
   workflow_call:
     inputs:
+      version:
+        description: "Stamped dev version computed by dev-prepare.yml (e.g. '0.6.24824839949'). Required — this ensures all three stages (prepare/binaries/publish) agree on the exact version."
+        required: true
+        type: string
       crates:
         description: "Space-separated ordered list of crates to publish (dependency order)"
         required: true
@@ -11,20 +42,8 @@ on:
         description: "Rust toolchain version"
         type: string
         default: "1.95.0"
-      run-tests:
-        description: "Run fmt/clippy/build/test before publish"
-        type: boolean
-        default: true
       setup-script:
-        description: "Optional shell commands to run before build (e.g., ci/setup.sh)"
-        type: string
-        default: ""
-      wasm-target:
-        description: "Add wasm32-wasip2 target for WASM component repos"
-        type: boolean
-        default: false
-      exclude-crates:
-        description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
+        description: "Optional shell commands to run before publish (e.g., ci/setup.sh)"
         type: string
         default: ""
       binary-crates:
@@ -35,10 +54,6 @@ on:
         description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-dev` from `target/bifurcate/<name>-dev/`"
         type: string
         default: ""
-    outputs:
-      version:
-        description: "Stamped dev version (e.g. '0.5.24824839949'). Consumed by dev-release-binaries.yml via needs.<job>.outputs.version in the caller."
-        value: ${{ jobs.publish.outputs.version }}
     secrets:
       CARGO_REGISTRY_TOKEN:
         required: true
@@ -51,54 +66,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  build-test:
-    name: CI (fmt / clippy / build / test)
-    if: inputs.run-tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ inputs.rust-version }}
-          components: rustfmt, clippy
-          targets: ${{ inputs.wasm-target && 'wasm32-wasip2' || '' }}
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Run setup script
-        if: inputs.setup-script != ''
-        run: ${{ inputs.setup-script }}
-
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: clippy
-        run: |
-          excludes=""
-          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo clippy --workspace --all-targets $excludes -- -D warnings
-
-      - name: build
-        run: |
-          excludes=""
-          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo build --workspace --all-features $excludes
-
-      - name: test
-        run: |
-          excludes=""
-          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo test --workspace --all-features $excludes -- --nocapture
-
   publish:
     name: Publish dev crates to crates.io
-    needs: [build-test]
-    if: always() && (needs.build-test.result == 'success' || needs.build-test.result == 'skipped')
     runs-on: ubuntu-latest
-    outputs:
-      # Stamped dev version (e.g. "0.5.24824839949"). Consumed by
-      # dev-release-binaries.yml so the matching GitHub Release tag and
-      # archive filenames line up with what the just-published crate expects.
-      version: ${{ steps.version.outputs.dev }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
@@ -114,29 +84,16 @@ jobs:
         id: base
         uses: greenticai/.github/.github/actions/extract-cargo-version@main
 
-      - name: Stamp dev version
-        id: version
+      - name: Stamp Cargo.toml to pre-computed dev version
         env:
           BASE: ${{ steps.base.outputs.version }}
+          DEV_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-
-          # Use {major}.{minor}.{GITHUB_RUN_ID} — a normal (non-pre-release)
-          # version. Cargo's semver crate has strict pre-release matching rules
-          # that prevent "0.4.58-dev.X" from matching range specs like
-          # ">=0.4.0-0, <0.5.0-0" (requires same M.m.p on the comparator).
-          # Normal versions match all range specs and pass cargo package
-          # dep validation against crates.io.
-          major_minor="${BASE%.*}"
-          dev="${major_minor}.${GITHUB_RUN_ID}"
-          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
-          echo "dev=${dev}" >> "$GITHUB_OUTPUT"
-          echo "Stamping version: ${BASE} → ${dev}"
-
-          # Stamp all Cargo.toml files (skip target/ build artifacts)
+          echo "Stamping version: ${BASE} → ${DEV_VERSION}"
           find . -name Cargo.toml -not -path './target/*' -print0 | while IFS= read -r -d '' f; do
             if grep -q "^version = \"${BASE}\"" "$f"; then
-              sed -i "s/^version = \"${BASE}\"/version = \"${dev}\"/" "$f"
+              sed -i "s/^version = \"${BASE}\"/version = \"${DEV_VERSION}\"/" "$f"
               echo "  stamped ${f}"
             fi
           done
@@ -210,14 +167,14 @@ jobs:
 
       - name: Dry-run publish (metadata validation)
         env:
-          DEV_VERSION: ${{ steps.version.outputs.dev }}
+          DEV_VERSION: ${{ inputs.version }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
           # Catch Cargo.toml metadata errors (missing fields, bad readme paths,
           # invalid license/keywords/categories, file inclusion/exclusion) before
-          # any real upload. --no-verify skips the build step (already covered by
-          # the build-test job).
+          # any real upload. --no-verify skips the build step (already covered
+          # by dev-prepare.yml's build-test job, which ran earlier in the run).
           while IFS=$'\t' read -r kind arg; do
             [ -z "$kind" ] && continue
             echo "::group::Dry-run ${kind}=${arg}"
@@ -241,7 +198,7 @@ jobs:
 
       - name: Publish crates
         env:
-          DEV_VERSION: ${{ steps.version.outputs.dev }}
+          DEV_VERSION: ${{ inputs.version }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
