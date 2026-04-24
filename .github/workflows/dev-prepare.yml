@@ -1,0 +1,134 @@
+name: Dev Prepare
+
+# Reusable workflow that runs fmt/clippy/build/test for the develop lane
+# and computes the stamped dev version `{M.m.GITHUB_RUN_ID}`. The version
+# output is consumed by dev-release-binaries.yml (to build + name archives)
+# and dev-publish.yml (to stamp Cargo.toml before cargo publish).
+#
+# This runs FIRST in the dev lane so that dev-publish.yml (which actually
+# pushes to crates.io) can be ordered AFTER dev-release-binaries.yml. If
+# a binary build fails, cargo publish never runs — no orphan crate version
+# left on crates.io without matching binaries.
+#
+# Caller pattern (emitted by sync-dev-publish.sh):
+#
+#   jobs:
+#     dev-prepare:
+#       uses: greenticai/.github/.github/workflows/dev-prepare.yml@main
+#       secrets: inherit
+#     dev-binaries-<pkg>:
+#       needs: dev-prepare
+#       uses: greenticai/.github/.github/workflows/dev-release-binaries.yml@main
+#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#     dev-publish:
+#       needs: [dev-prepare, dev-binaries-<pkg>]
+#       uses: greenticai/.github/.github/workflows/dev-publish.yml@main
+#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      run-tests:
+        description: "Run fmt/clippy/build/test before exporting version"
+        type: boolean
+        default: true
+      setup-script:
+        description: "Optional shell commands to run before build (e.g., ci/setup.sh)"
+        type: string
+        default: ""
+      wasm-target:
+        description: "Add wasm32-wasip2 target for WASM component repos"
+        type: boolean
+        default: false
+      exclude-crates:
+        description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
+        type: string
+        default: ""
+    outputs:
+      version:
+        description: "Stamped dev version `{major}.{minor}.{GITHUB_RUN_ID}` (e.g. '0.6.24824839949'). Pass this as the `version` input to dev-release-binaries.yml and dev-publish.yml so all three stages agree on the exact version."
+        value: ${{ jobs.compute-version.outputs.version }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-test:
+    name: CI (fmt / clippy / build / test)
+    if: inputs.run-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: rustfmt, clippy
+          targets: ${{ inputs.wasm-target && 'wasm32-wasip2' || '' }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo clippy --workspace --all-targets $excludes -- -D warnings
+
+      - name: build
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo build --workspace --all-features $excludes
+
+      - name: test
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo test --workspace --all-features $excludes -- --nocapture
+
+  compute-version:
+    name: Compute stamped dev version
+    needs: [build-test]
+    if: always() && (needs.build-test.result == 'success' || needs.build-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.stamp.outputs.dev }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract base version
+        id: base
+        uses: greenticai/.github/.github/actions/extract-cargo-version@main
+
+      - name: Stamp dev version
+        id: stamp
+        env:
+          BASE: ${{ steps.base.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Use {major}.{minor}.{GITHUB_RUN_ID} — a normal (non-pre-release)
+          # version. Cargo's semver crate has strict pre-release matching rules
+          # that prevent "0.4.58-dev.X" from matching range specs like
+          # ">=0.4.0-0, <0.5.0-0" (requires same M.m.p on the comparator).
+          # Normal versions match all range specs and pass cargo package
+          # dep validation against crates.io.
+          major_minor="${BASE%.*}"
+          dev="${major_minor}.${GITHUB_RUN_ID}"
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "dev=${dev}" >> "$GITHUB_OUTPUT"
+          echo "Computed dev version: ${BASE} → ${dev}"

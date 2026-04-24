@@ -16,7 +16,11 @@ name: Reusable workflows self-test
 #   crates-publish.yml
 #     Publishes to crates.io — must never run from a test harness.
 #   dev-publish.yml
-#     Publishes to AWS CodeArtifact — same concern.
+#     Publishes to crates.io — same concern.
+#   dev-prepare.yml
+#     Feeder for dev-publish.yml; keeping them together avoids exercising
+#     the dev lane's version-stamping logic under a test harness with no
+#     guarantee that the fixture crate's base version is kept in sync.
 #   release-binaries.yml
 #     Cuts a GitHub Release and uploads cross-platform binaries.
 #   notify-failure.yml, notify-success.yml
