@@ -165,37 +165,6 @@ jobs:
           echo "Effective publish list:"
           cat /tmp/publish-list.txt
 
-      - name: Dry-run publish (metadata validation)
-        env:
-          DEV_VERSION: ${{ inputs.version }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Catch Cargo.toml metadata errors (missing fields, bad readme paths,
-          # invalid license/keywords/categories, file inclusion/exclusion) before
-          # any real upload. --no-verify skips the build step (already covered
-          # by dev-prepare.yml's build-test job, which ran earlier in the run).
-          while IFS=$'\t' read -r kind arg; do
-            [ -z "$kind" ] && continue
-            echo "::group::Dry-run ${kind}=${arg}"
-            case "$kind" in
-              pkg)
-                cargo publish -p "$arg" \
-                  --dry-run --allow-dirty --no-verify
-                ;;
-              manifest)
-                cargo publish --manifest-path "$arg" \
-                  --dry-run --allow-dirty --no-verify
-                ;;
-              *)
-                echo "::error::Unknown publish kind: $kind"
-                exit 1
-                ;;
-            esac
-            echo "::endgroup::"
-          done < /tmp/publish-list.txt
-          echo "✓ Metadata OK for all crates"
-
       - name: Publish crates
         env:
           DEV_VERSION: ${{ inputs.version }}
@@ -206,6 +175,23 @@ jobs:
           # Accepts two forms (from the effective publish list):
           #   publish_entry pkg <crate>        → cargo publish -p <crate>
           #   publish_entry manifest <path>    → cargo publish --manifest-path <path>
+          # Dry-run before each publish, in the same loop. Earlier crates land
+          # on crates.io before later ones run their dry-run, so workspace path
+          # deps published earlier in this run are resolvable when later crates
+          # validate. Combining the loops fixes the bootstrap case where a
+          # workspace member is being published to crates.io for the first time.
+          dry_run_entry() {
+            local kind="$1"
+            local arg="$2"
+            if [ "$kind" = "manifest" ]; then
+              cargo publish --manifest-path "$arg" \
+                --dry-run --allow-dirty --no-verify
+            else
+              cargo publish -p "$arg" \
+                --dry-run --allow-dirty --no-verify
+            fi
+          }
+
           publish_entry() {
             local kind="$1"
             local arg="$2"
@@ -273,6 +259,9 @@ jobs:
           published=0
           while IFS=$'\t' read -r kind arg; do
             [ -z "$kind" ] && continue
+            echo "::group::Dry-run ${kind}=${arg}"
+            dry_run_entry "$kind" "$arg"
+            echo "::endgroup::"
             publish_entry "$kind" "$arg"
             published=$((published + 1))
             echo "Waiting 5s for index propagation..."
