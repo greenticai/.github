@@ -86,7 +86,7 @@ jobs:
         run: |
           excludes=""
           for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo clippy --workspace --all-targets $excludes -- -D warnings
+          cargo clippy --workspace --all-targets --all-features $excludes -- -D warnings
 
       - name: build
         run: |
