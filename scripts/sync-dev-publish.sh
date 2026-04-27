@@ -189,14 +189,16 @@ concurrency:
 
 jobs:
   # Stage 1 — tests + version stamping. Outputs the stamped dev version
-  # {M.m.GITHUB_RUN_ID} consumed by binaries + publish.
+  # consumed by binaries + publish. Form is M.m.p-dev.{RUN_ID} for binary-
+  # bifurcated repos (require-pre-release: true) so dev publishes sort below
+  # stable on crates.io; M.m.{RUN_ID} regular release otherwise.
   dev-prepare:
     uses: greenticai/.github/.github/workflows/dev-prepare.yml@main
 EOF
 
   # Only emit `with:` when at least one input needs to be set, so actionlint
   # doesn't complain about an empty `with:` block (it's valid YAML but noisy).
-  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" ]]; then
+  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$binary_crates" ]]; then
     echo "    with:"
   fi
 
@@ -213,6 +215,13 @@ EOF
 
   if [[ "$variant" == "wasm" ]]; then
     echo "      wasm-target: true"
+  fi
+
+  # Binary-bifurcated repos require pre-release version stamping so dev
+  # publishes don't pollute the stable `<name>` namespace on crates.io.
+  # See plans/binary-bifurcation.md 2026-04-27 update.
+  if [[ -n "$binary_crates" ]]; then
+    echo "      require-pre-release: true"
   fi
 
   # Stage 2 — binaries (only if this repo ships one or more binary crates).
@@ -260,6 +269,12 @@ EOF
 
   if [[ -n "$dual_role_binary_crates" ]]; then
     echo "      dual-role-binary-crates: \"$dual_role_binary_crates\""
+  fi
+
+  # Mirror require-pre-release on dev-publish so a manually-dispatched run
+  # (without dev-prepare upstream) still validates the version form.
+  if [[ -n "$binary_crates" ]]; then
+    echo "      require-pre-release: true"
   fi
 
   echo "    secrets: inherit"

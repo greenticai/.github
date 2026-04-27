@@ -49,9 +49,13 @@ on:
         description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
         type: string
         default: ""
+      require-pre-release:
+        description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
+        type: boolean
+        default: false
     outputs:
       version:
-        description: "Stamped dev version `{major}.{minor}.{GITHUB_RUN_ID}` (e.g. '0.6.24824839949'). Pass this as the `version` input to dev-release-binaries.yml and dev-publish.yml so all three stages agree on the exact version."
+        description: "Stamped dev version. Form depends on Cargo.toml base — `M.m.p-dev.{GITHUB_RUN_ID}` if base is pre-release `M.m.p-dev.N` (preferred — sorts below stable), else `{major}.{minor}.{GITHUB_RUN_ID}` regular release. Pass this as the `version` input to dev-release-binaries.yml and dev-publish.yml so all three stages agree on the exact version."
         value: ${{ jobs.compute-version.outputs.version }}
 
 permissions:
@@ -118,17 +122,43 @@ jobs:
         id: stamp
         env:
           BASE: ${{ steps.base.outputs.version }}
+          REQUIRE_PRE_RELEASE: ${{ inputs.require-pre-release }}
         run: |
           set -euo pipefail
 
-          # Use {major}.{minor}.{GITHUB_RUN_ID} — a normal (non-pre-release)
-          # version. Cargo's semver crate has strict pre-release matching rules
-          # that prevent "0.4.58-dev.X" from matching range specs like
-          # ">=0.4.0-0, <0.5.0-0" (requires same M.m.p on the comparator).
-          # Normal versions match all range specs and pass cargo package
-          # dep validation against crates.io.
-          major_minor="${BASE%.*}"
-          dev="${major_minor}.${GITHUB_RUN_ID}"
+          # Two stamping forms:
+          #
+          # 1. Pre-release `M.m.p-dev.{RUN_ID}` (preferred for binary-bifurcated
+          #    repos per plans/binary-bifurcation.md 2026-04-27 update). Cargo.toml
+          #    base must be `M.m.p-dev.N`; ${BASE%.*} strips `.N` leaving
+          #    `M.m.p-dev`, then append RUN_ID. Pre-release versions sort BELOW
+          #    stable on crates.io, so dual-role library publishes don't
+          #    preempt the stable `<name>` namespace. Range matching against
+          #    workspace specs `>=M.m.0-0, <M.next.0-0` works because patch
+          #    stays at 0 — same M.m.p on version + comparator.
+          #
+          # 2. Regular `{major}.{minor}.{RUN_ID}` (legacy form, allowed for
+          #    same-name library repos that haven't adopted the pre-release
+          #    minor-bump lane yet). Cargo.toml base is `M.m.p` regular release;
+          #    ${BASE%.*} strips `.p` leaving `M.m`, then append RUN_ID. WARNING:
+          #    on dual-role repos this pollutes the stable `<name>` namespace —
+          #    set `require-pre-release: true` on the caller to forbid this.
+          if [[ "${BASE}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            kind="pre-release"
+          elif [[ "${BASE}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            kind="regular"
+            if [[ "${REQUIRE_PRE_RELEASE}" == "true" ]]; then
+              echo "::error::Cargo.toml base '${BASE}' is regular-release form, but require-pre-release=true."
+              echo "::error::Binary-bifurcated repos must adopt 'M.next.0-dev.0' base on develop to prevent stable namespace pollution on crates.io."
+              echo "::error::See plans/binary-bifurcation.md 2026-04-27 update + plans/pre-release-minor-bump-lane.md Phase 2."
+              exit 1
+            fi
+          else
+            echo "::error::Cargo.toml base '${BASE}' does not match supported forms 'M.m.p' or 'M.m.p-dev.N'."
+            exit 1
+          fi
+          major_minor_patch="${BASE%.*}"
+          dev="${major_minor_patch}.${GITHUB_RUN_ID}"
           echo "base=${BASE}" >> "$GITHUB_OUTPUT"
           echo "dev=${dev}" >> "$GITHUB_OUTPUT"
-          echo "Computed dev version: ${BASE} → ${dev}"
+          echo "Computed dev version (${kind}): ${BASE} → ${dev}"
