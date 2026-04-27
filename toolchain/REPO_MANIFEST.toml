@@ -321,6 +321,8 @@ variant = "host"
 tier = 4
 publishes = ["dwbase-core", "dwbase-metrics", "dwbase-engine", "dwbase-storage-sled", "dwbase-vector-hnsw", "dwbase-stream-local", "dwbase-security", "dwbase-embedder-dummy", "dwbase-swarm", "dwbase-swarm-nats", "dwbase-node", "dwbase-cli", "dwbase-pack-runner"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on cli-binaries)
+binary-crates = ["dwbase-cli", "dwbase-node", "dwbase-pack-runner"]
+dual-role-binary-crates = []
 exclude-crates = ["component-dwbase"]
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
@@ -355,6 +357,15 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 
 # ─── Tier 5 — CLI / Tooling ─────────────────────────────────────
+
+[repos.greentic-coding-agent]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = []  # internal coding-agent scaffold; all crates set publish = false
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
 
 [repos.greentic]
 org = "greenticai"
@@ -411,6 +422,8 @@ variant = "host"
 tier = 5
 publishes = ["greentic-deployer"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on publish-version-release)
+binary-crates = ["greentic-deployer"]
+dual-role-binary-crates = ["greentic-deployer"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
