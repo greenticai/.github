@@ -189,16 +189,19 @@ concurrency:
 
 jobs:
   # Stage 1 — tests + version stamping. Outputs the stamped dev version
-  # consumed by binaries + publish. Form is M.m.p-dev.{RUN_ID} for binary-
-  # bifurcated repos (require-pre-release: true) so dev publishes sort below
-  # stable on crates.io; M.m.{RUN_ID} regular release otherwise.
+  # consumed by binaries + publish. Form is M.m.p-dev.{RUN_ID} for
+  # dual-role repos (require-pre-release: true) so dev library publishes
+  # sort below stable on crates.io; M.m.{RUN_ID} regular release for
+  # binary-only repos (no stable namespace to protect) and pure libraries.
   dev-prepare:
     uses: greenticai/.github/.github/workflows/dev-prepare.yml@main
 EOF
 
   # Only emit `with:` when at least one input needs to be set, so actionlint
   # doesn't complain about an empty `with:` block (it's valid YAML but noisy).
-  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$binary_crates" ]]; then
+  # `require-pre-release` is the only binary-related input on dev-prepare,
+  # and it's gated on dual-role (not binary-only) — so use the same gate here.
+  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$dual_role_binary_crates" ]]; then
     echo "    with:"
   fi
 
@@ -217,10 +220,14 @@ EOF
     echo "      wasm-target: true"
   fi
 
-  # Binary-bifurcated repos require pre-release version stamping so dev
-  # publishes don't pollute the stable `<name>` namespace on crates.io.
-  # See plans/binary-bifurcation.md 2026-04-27 update.
-  if [[ -n "$binary_crates" ]]; then
+  # Dual-role repos (library + binary at the same crate name) require
+  # pre-release version stamping so dev publishes of the LIBRARY don't
+  # pollute the stable `<name>` namespace on crates.io. Binary-only repos
+  # have no stable `<name>` to protect (they only ever publish under
+  # `<name>-dev`), so they stay on regular-release base — pre-release
+  # would just break `cargo binstall <name>-dev` (cargo skips pre-releases
+  # by default). See plans/binary-bifurcation.md 2026-04-27 update.
+  if [[ -n "$dual_role_binary_crates" ]]; then
     echo "      require-pre-release: true"
   fi
 
@@ -281,7 +288,8 @@ EOF
 
   # Mirror require-pre-release on dev-publish so a manually-dispatched run
   # (without dev-prepare upstream) still validates the version form.
-  if [[ -n "$binary_crates" ]]; then
+  # Same dual-role gate as on dev-prepare above.
+  if [[ -n "$dual_role_binary_crates" ]]; then
     echo "      require-pre-release: true"
   fi
 
