@@ -31,9 +31,13 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Stamped dev version computed by dev-prepare.yml (e.g. '0.6.24824839949'). Required — this ensures all three stages (prepare/binaries/publish) agree on the exact version."
+        description: "Stamped LIBRARY version from dev-prepare.yml's `lib-version` output (form: `M.m.p-dev.{RUN_ID}` for pre-release base, else `M.m.{RUN_ID}`). Used to stamp the workspace and publish library crates under `<name>`. Required."
         required: true
         type: string
+      binary-version:
+        description: "Stamped BINARY version from dev-prepare.yml's `binary-version` output (always regular release `M.m.{RUN_ID}`). Used to re-stamp `target/bifurcate/<name>-dev/Cargo.toml` after the bifurcation step so the `<name>-dev` crates.io publish lands as a regular release (not pre-release) — keeps `cargo binstall <name>-dev` working without flags. Required when `binary-crates` is non-empty AND `version` is on pre-release form. If unset, the bifurcate copy keeps the lib-version (legacy behavior)."
+        type: string
+        default: ""
       crates:
         description: "Space-separated ordered list of crates to publish (dependency order)"
         required: true
@@ -51,9 +55,13 @@ on:
         type: string
         default: ""
       dual-role-binary-crates:
-        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-dev` from `target/bifurcate/<name>-dev/`"
+        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-dev` from `target/bifurcate/<name>-dev/`. With `require-pre-release: true`, the library publish lands as a pre-release version (e.g. `0.6.0-dev.{RUN_ID}`) which sorts below stable on crates.io — preventing stable namespace pollution. See plans/binary-bifurcation.md 2026-04-27 update."
         type: string
         default: ""
+      require-pre-release:
+        description: "If true, fail unless the input `version` is on `M.m.p-dev.{N}` pre-release form. Set by binary-bifurcated repos. Mirrors the same input on dev-prepare.yml so a dispatched dev-publish.yml run also validates."
+        type: boolean
+        default: false
     secrets:
       CARGO_REGISTRY_TOKEN:
         required: true
@@ -79,6 +87,21 @@ jobs:
       - name: Run setup script
         if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
+
+      - name: Validate dev version form
+        env:
+          DEV_VERSION: ${{ inputs.version }}
+          REQUIRE_PRE_RELEASE: ${{ inputs.require-pre-release }}
+        run: |
+          set -euo pipefail
+          if [[ "${REQUIRE_PRE_RELEASE}" == "true" ]]; then
+            if ! [[ "${DEV_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+              echo "::error::version '${DEV_VERSION}' is not on 'M.m.p-dev.N' pre-release form, but require-pre-release=true."
+              echo "::error::Binary-bifurcated repos must publish dev versions as pre-release to avoid stable namespace pollution on crates.io."
+              echo "::error::See plans/binary-bifurcation.md 2026-04-27 update."
+              exit 1
+            fi
+          fi
 
       - name: Extract base version
         id: base
@@ -123,6 +146,52 @@ jobs:
             python3 /tmp/rewrite-binary-name.py \
               --crate "$crate" --suffix dev --workdir . $dr_flag
             echo "::endgroup::"
+          done
+
+      - name: Re-stamp bifurcate copies to binary-version
+        if: inputs.binary-crates != '' && inputs.binary-version != '' && inputs.binary-version != inputs.version
+        env:
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+          LIB_VERSION: ${{ inputs.version }}
+          BIN_VERSION: ${{ inputs.binary-version }}
+        run: |
+          set -euo pipefail
+          # The previous stamp step stamped every Cargo.toml (including each
+          # bifurcate copy) to the LIBRARY version (pre-release form, e.g.
+          # 0.6.0-dev.{RUN_ID}). For dual-role crates we now re-stamp ONLY the
+          # bifurcate copy at target/bifurcate/<crate>-dev/Cargo.toml to the
+          # BINARY version (regular release, e.g. 0.6.{RUN_ID}). This keeps
+          # the `<name>` library publish on pre-release (sorts below stable)
+          # while the `<name>-dev` binary publish lands as regular release
+          # (resolvable by `cargo binstall <name>-dev` without flags).
+          # Binary-only crates don't need re-stamping — they're rewritten
+          # in-place by rewrite-binary-name.py without --dual-role, so
+          # there's only one Cargo.toml and it's the same crate that gets
+          # published as `<crate>-dev`.
+          echo "Re-stamping bifurcate copies: ${LIB_VERSION} → ${BIN_VERSION}"
+          for crate in $BINARY_CRATES; do
+            is_dual_role=0
+            for dr in $DUAL_ROLE; do
+              if [ "$dr" = "$crate" ]; then
+                is_dual_role=1
+                break
+              fi
+            done
+            if [ "$is_dual_role" -ne 1 ]; then
+              continue
+            fi
+            copy="target/bifurcate/${crate}-dev/Cargo.toml"
+            if [ ! -f "$copy" ]; then
+              echo "::error::Expected bifurcate copy at ${copy} but it does not exist"
+              exit 1
+            fi
+            if ! grep -q "^version = \"${LIB_VERSION}\"" "$copy"; then
+              echo "::error::Bifurcate copy ${copy} does not contain expected version line 'version = \"${LIB_VERSION}\"' — rewrite-binary-name.py output unexpected"
+              exit 1
+            fi
+            sed -i "s/^version = \"${LIB_VERSION}\"/version = \"${BIN_VERSION}\"/" "$copy"
+            echo "  re-stamped ${copy}"
           done
 
       - name: Compute effective publish list
