@@ -55,8 +55,14 @@ on:
         default: false
     outputs:
       version:
-        description: "Stamped dev version. Form depends on Cargo.toml base — `M.m.p-dev.{GITHUB_RUN_ID}` if base is pre-release `M.m.p-dev.N` (preferred — sorts below stable), else `{major}.{minor}.{GITHUB_RUN_ID}` regular release. Pass this as the `version` input to dev-release-binaries.yml and dev-publish.yml so all three stages agree on the exact version."
+        description: "Stamped LIBRARY version (alias retained for backward compatibility — equals `lib-version`). Form depends on Cargo.toml base: `M.m.p-dev.{GITHUB_RUN_ID}` if base is pre-release `M.m.p-dev.N` (preferred for binary-bifurcated repos — sorts below stable on crates.io), else `{major}.{minor}.{GITHUB_RUN_ID}` regular release. Used to stamp the workspace and publish library crates under `<name>`."
         value: ${{ jobs.compute-version.outputs.version }}
+      lib-version:
+        description: "Explicit alias of `version` — the LIBRARY version. Used to stamp Cargo.toml across the workspace. For binary-bifurcated dual-role repos, this is intentionally pre-release so dev publishes of `<name>` libraries don't preempt stable on crates.io."
+        value: ${{ jobs.compute-version.outputs.version }}
+      binary-version:
+        description: "Stamped BINARY version (regular release `{major}.{minor}.{GITHUB_RUN_ID}`). Used by binary-bifurcated repos for the `<name>-dev` crates.io publish + binstall archive naming. Regular release (not pre-release) so `cargo binstall <name>-dev` resolves without `--version` flags. For repos on a regular-release Cargo.toml base, this equals `lib-version`."
+        value: ${{ jobs.compute-version.outputs.binary }}
 
 permissions:
   contents: read
@@ -111,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.stamp.outputs.dev }}
+      binary: ${{ steps.stamp.outputs.binary }}
     steps:
       - uses: actions/checkout@v6
 
@@ -143,10 +150,12 @@ jobs:
           #    ${BASE%.*} strips `.p` leaving `M.m`, then append RUN_ID. WARNING:
           #    on dual-role repos this pollutes the stable `<name>` namespace —
           #    set `require-pre-release: true` on the caller to forbid this.
-          if [[ "${BASE}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+          if [[ "${BASE}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+-dev\.[0-9]+$ ]]; then
             kind="pre-release"
-          elif [[ "${BASE}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            major_minor="${BASH_REMATCH[1]}"
+          elif [[ "${BASE}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
             kind="regular"
+            major_minor="${BASH_REMATCH[1]}"
             if [[ "${REQUIRE_PRE_RELEASE}" == "true" ]]; then
               echo "::error::Cargo.toml base '${BASE}' is regular-release form, but require-pre-release=true."
               echo "::error::Binary-bifurcated repos must adopt 'M.next.0-dev.0' base on develop to prevent stable namespace pollution on crates.io."
@@ -157,8 +166,20 @@ jobs:
             echo "::error::Cargo.toml base '${BASE}' does not match supported forms 'M.m.p' or 'M.m.p-dev.N'."
             exit 1
           fi
+          # `dev` is the LIBRARY version (alias `lib-version`). For pre-release
+          # base it preserves the pre-release suffix so the lib publish sorts
+          # below stable on crates.io. For regular base it's just M.m.{RUN_ID}.
           major_minor_patch="${BASE%.*}"
           dev="${major_minor_patch}.${GITHUB_RUN_ID}"
+          # `binary` is the BINARY version — always regular release
+          # M.m.{RUN_ID} regardless of base form, so `cargo binstall <name>-dev`
+          # resolves without `--version` flags. For regular-base repos this
+          # equals `dev`; for pre-release-base repos this is the same M.m
+          # (next minor) but without the `-dev.0` suffix.
+          binary="${major_minor}.${GITHUB_RUN_ID}"
           echo "base=${BASE}" >> "$GITHUB_OUTPUT"
           echo "dev=${dev}" >> "$GITHUB_OUTPUT"
-          echo "Computed dev version (${kind}): ${BASE} → ${dev}"
+          echo "binary=${binary}" >> "$GITHUB_OUTPUT"
+          echo "Computed dev version (${kind}):"
+          echo "  ${BASE} → lib=${dev}"
+          echo "  ${BASE} → binary=${binary}"

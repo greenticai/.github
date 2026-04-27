@@ -226,6 +226,8 @@ EOF
 
   # Stage 2 — binaries (only if this repo ships one or more binary crates).
   # One job per binary crate so each target's failure is independent.
+  # Archive naming uses the BINARY version (regular release `M.m.{RUN_ID}`)
+  # so `cargo binstall <crate>-dev` resolves the archive without flags.
   local binary_job_ids=""
   if [[ -n "$binary_crates" ]]; then
     for pkg in $binary_crates; do
@@ -238,7 +240,7 @@ EOF
     uses: greenticai/.github/.github/workflows/dev-release-binaries.yml@main
     with:
       package: ${pkg}
-      version: \${{ needs.dev-prepare.outputs.version }}
+      version: \${{ needs.dev-prepare.outputs.binary-version }}
 EOF
     done
   fi
@@ -256,6 +258,12 @@ EOF
       version: \${{ needs.dev-prepare.outputs.version }}
       crates: "$crates"
 EOF
+
+  # Pass binary-version so dev-publish.yml can re-stamp bifurcate copies
+  # to regular-release form. Only emit for binary-bifurcated repos.
+  if [[ -n "$binary_crates" ]]; then
+    echo "      binary-version: \${{ needs.dev-prepare.outputs.binary-version }}"
+  fi
 
   if [[ -n "$setup_script" ]]; then
     local escaped2="${setup_script//\\/\\\\}"
