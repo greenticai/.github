@@ -24,14 +24,23 @@ Idempotent: if [package].name already equals <crate>-<suffix>, exits 0
 without touching anything.
 
 The rewrite intentionally does NOT touch:
-  - [lib] name (Rust identifier; crate consumers use it via `use <lib_name>::`,
-    so renaming would break internal imports)
-  - an existing [package.metadata.binstall] table (respect whatever the crate
-    author wrote; this only injects a default block when none is present)
+  - an existing [lib] table — author already opted out of auto-discovery
   - [dependencies.<crate>] sub-tables (would be a rename, not what we want)
 
+When the crate has src/lib.rs but no [lib] table, an explicit
+``[lib] name = "<crate>"`` (dash-to-underscore-normalized) is appended. Without
+it, cargo derives the lib name from [package].name, so renaming the package to
+``<crate>-<suffix>`` silently renames the lib too — breaking ``use <crate>::``
+imports in the same crate's bin source. Pinning [lib].name keeps internal
+imports resolving after the package rename.
+
 When no [package.metadata.binstall] exists, a default block is appended
-pointing at the dev-release-binaries.yml archive layout. Phase C.4.
+pointing at the dev-release-binaries.yml archive layout (Phase C.4). In
+``--dual-role`` mode the staged copy's binstall metadata is OVERWRITTEN
+unconditionally — author binstall is configured for the stable lane and won't
+match dev-release archives, and the original Cargo.toml on develop is
+untouched anyway, so we always force the dev-pipeline-compatible layout for
+the dev publish.
 """
 
 from __future__ import annotations
@@ -178,9 +187,15 @@ def rewrite_manifest(manifest: Path, crate: str, new_name: str) -> bool:
     # Append an explicit [[bin]] block so the renamed binary wins.
     new_text = _inject_bin_override_if_needed(new_text, manifest, crate, new_name)
 
+    # Pin the auto-discovered lib name so `use <crate>::...` in the same crate's
+    # bin source keeps resolving after the [package].name rename. No-op when
+    # there's no src/lib.rs or [lib] is already explicit.
+    new_text = _inject_lib_override_if_needed(new_text, manifest, crate)
+
     # Inject default [package.metadata.binstall] pointing at the archive layout
     # produced by dev-release-binaries.yml. Only runs if no binstall metadata
-    # is already present — crate-owned overrides win.
+    # is already present — crate-owned overrides win in non-dual-role mode.
+    # Dual-role callers force-override later via force_dev_binstall().
     new_text = _inject_binstall_metadata_if_needed(new_text)
 
     new_data = tomllib.loads(new_text)
@@ -255,6 +270,35 @@ def _inject_bin_override_if_needed(
     return text + appended
 
 
+def _inject_lib_override_if_needed(text: str, manifest: Path, crate: str) -> str:
+    """Pin the auto-discovered lib name when ``src/lib.rs`` exists and no ``[lib]`` is set.
+
+    Without an explicit ``[lib]`` table, cargo derives the lib name from
+    ``[package].name``. Once the rewrite renames ``[package].name`` to
+    ``<crate>-<suffix>``, the auto-derived lib name becomes ``<crate>_<suffix>``,
+    which breaks every ``use <crate>::...`` in the same crate's bin source.
+
+    This appends ``[lib] name = "<crate>"`` (dash-to-underscore-normalized to
+    match cargo's lib-name rules) so the lib keeps its original identifier
+    after the package rename. ``path`` is intentionally omitted — cargo
+    auto-discovers ``src/lib.rs``.
+
+    No-op when:
+      - the crate has no ``src/lib.rs`` (binary-only crate, nothing to pin); or
+      - ``[lib]`` already exists (author has explicit configuration; we don't
+        second-guess and we can't safely append a second ``[lib]`` table).
+    """
+    lib_file = manifest.parent / "src" / "lib.rs"
+    if not lib_file.is_file():
+        return text
+    data = tomllib.loads(text)
+    if "lib" in data:
+        return text
+    lib_name = crate.replace("-", "_")
+    separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    return text + f'{separator}[lib]\nname = "{lib_name}"\n'
+
+
 def _inject_binstall_metadata_if_needed(text: str) -> str:
     """Append BINSTALL_BLOCK when no [package.metadata.binstall] already exists.
 
@@ -270,6 +314,40 @@ def _inject_binstall_metadata_if_needed(text: str) -> str:
         return text
     separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
     return text + separator + BINSTALL_BLOCK
+
+
+def force_dev_binstall(copy_manifest: Path) -> None:
+    """Replace any ``[package.metadata.binstall]`` in the staged copy with the dev layout.
+
+    Author-supplied binstall is configured for the stable lane (release tag
+    ``v{X.Y.Z}`` with archive ``{ name }-{ target }.tgz`` inside a ``{ name }-{ target }/``
+    directory). The dev lane uses a different tag/archive layout (matching
+    ``dev-release-binaries.yml``: ``{ name }-v{ version }-{ target }.tgz``), so
+    we unconditionally override for ``--dual-role`` publishes. The original
+    Cargo.toml on ``develop`` stays untouched — only the staged copy at
+    ``target/bifurcate/<crate>-<suffix>/`` is mutated.
+
+    Drops any ``[package.metadata.binstall.overrides.*]`` sub-tables that the
+    author may have set (per-target archive-format etc.) — those are stable-
+    lane specific and don't apply to dev archives.
+
+    Uses ``tomli_w`` for the round-trip; the staged copy is ephemeral (one
+    publish, then discarded) so reformat is acceptable. Same trade-off as
+    ``resolve_workspace_inheritance``.
+    """
+    with copy_manifest.open("rb") as fh:
+        data = tomllib.load(fh)
+    metadata = data.setdefault("package", {}).setdefault("metadata", {})
+    metadata["binstall"] = {
+        "pkg-url": (
+            "{ repo }/releases/download/v{ version }/"
+            "{ name }-v{ version }-{ target }{ archive-suffix }"
+        ),
+        "bin-dir": "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }",
+        "pkg-fmt": "tgz",
+    }
+    with copy_manifest.open("wb") as fh:
+        tomli_w.dump(data, fh)
 
 
 def stage_dual_role_copy(manifest: Path, new_name: str, workdir: Path) -> Path:
@@ -497,6 +575,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.dual_role:
         copy_manifest = stage_dual_role_copy(manifest, new_name, workdir)
         changed = rewrite_manifest(copy_manifest, args.crate, new_name)
+
+        # Author-supplied [package.metadata.binstall] targets the stable release
+        # tag/archive layout, which doesn't match dev-release-binaries.yml
+        # output. Force the dev-pipeline-compatible block on the staged copy
+        # so `cargo binstall <crate>-dev` actually finds prebuilt binaries
+        # instead of falling back to source.
+        force_dev_binstall(copy_manifest)
 
         # Resolve workspace inheritance so the copy is publishable standalone.
         # Look up from the ORIGINAL manifest, not the copy, because the copy
