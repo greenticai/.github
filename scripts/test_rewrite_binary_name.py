@@ -455,6 +455,66 @@ edition = "2024"
     print("OK  test_autodiscovered_idempotent")
 
 
+def test_inline_bin_array_at_root() -> None:
+    """Manifest using inline ``bin = [{name = "<crate>", ...}]`` at the root
+    must rewrite the inline name, not append a [[bin]] block.
+
+    Reproduces the greentic Cargo.toml layout where target arrays are inline
+    at the top of the file. Appending [[bin]] in this case produced an invalid
+    TOML manifest ("Cannot mutate immutable namespace ('bin',)") because the
+    array was already defined as inline.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+bin = [
+    { name = "gtc", path = "src/bin/gtc.rs" },
+]
+bench = [
+    { name = "perf", harness = false },
+]
+
+[package]
+name = "gtc"
+version = "1.1.0-dev.0"
+edition = "2024"
+repository = "https://github.com/greenticai/greentic"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "gtc-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[dependencies]
+anyhow = "1"
+""",
+        )
+        _write(root, "src/bin/gtc.rs", "fn main() {}\n")
+
+        _run(root, "gtc")
+
+        data = _load(root / "Cargo.toml")
+        _assert(
+            data["package"]["name"] == "gtc-dev",
+            f"expected package.name='gtc-dev', got {data['package']['name']!r}",
+        )
+        bin_names = sorted(b["name"] for b in data["bin"])
+        _assert(
+            bin_names == ["gtc-dev"],
+            f"expected single inline bin renamed to 'gtc-dev', got {bin_names}",
+        )
+        # Existing binstall metadata is the author's; must stay intact.
+        binstall = data["package"]["metadata"]["binstall"]
+        _assert(
+            binstall["bin-dir"] == "gtc-{ target }/{ bin }{ binary-ext }",
+            f"author-supplied binstall must not be overwritten, got {binstall!r}",
+        )
+    print("OK  test_inline_bin_array_at_root")
+
+
 def test_main_rs_does_not_get_bin_override() -> None:
     """Crate with src/main.rs (no src/bin/) relies on [package].name — no injection needed."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1003,6 +1063,7 @@ def main() -> int:
     test_missing_crate_fails()
     test_autodiscovered_src_bin_gets_bin_override()
     test_autodiscovered_idempotent()
+    test_inline_bin_array_at_root()
     test_main_rs_does_not_get_bin_override()
     test_workspace_inherit_keys_preserved()
     test_dual_role_resolves_workspace_package_inherit()

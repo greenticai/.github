@@ -165,6 +165,7 @@ def rewrite_manifest(manifest: Path, crate: str, new_name: str) -> bool:
         )
 
     new_text = _rewrite_text(original, crate, new_name)
+    new_text = _rewrite_inline_bin_array_at_root(new_text, crate, new_name)
     if new_text == original:
         sys.exit(
             f"error: {manifest} parses with [package].name == '{crate}' but "
@@ -192,6 +193,38 @@ def rewrite_manifest(manifest: Path, crate: str, new_name: str) -> bool:
 
     manifest.write_text(new_text)
     return True
+
+
+def _rewrite_inline_bin_array_at_root(text: str, crate: str, new_name: str) -> str:
+    """Rewrite ``name = "<crate>"`` inside a root-level inline ``bin = [...]`` array.
+
+    Cargo accepts both ``[[bin]]`` (array of tables) and ``bin = [{name = ..., path = ...}]``
+    (inline array assigned to the root) for binary targets. ``_rewrite_text``
+    only handles the ``[[bin]]`` form; this helper covers the inline form (used
+    by the ``gtc`` crate). Without it, the matching ``name`` stays unchanged
+    and ``_inject_bin_override_if_needed`` falls back to appending ``[[bin]]``,
+    which TOML rejects because ``bin`` is already an inline array.
+
+    Only matches ``bin = [...]`` appearing before the first ``[section]`` /
+    ``[[section]]`` header — anything after a header belongs to that table,
+    not the root, and is out of scope for binary-target rewriting.
+    """
+    header_match = re.search(r"^\s*\[\[?[^\[\]\n]+\]\]?\s*(?:#.*)?$", text, re.MULTILINE)
+    head_end = header_match.start() if header_match else len(text)
+    head = text[:head_end]
+    rest = text[head_end:]
+
+    bin_re = re.compile(r"(^\s*bin\s*=\s*\[)([^\[\]]*?)(\])", re.MULTILINE | re.DOTALL)
+    name_re = re.compile(r'(name\s*=\s*)"' + re.escape(crate) + r'"')
+
+    def _replace(match: re.Match) -> str:
+        prefix, body, suffix = match.group(1), match.group(2), match.group(3)
+        new_body, count = name_re.subn(rf'\1"{new_name}"', body, count=1)
+        if count == 0:
+            return match.group(0)
+        return prefix + new_body + suffix
+
+    return bin_re.sub(_replace, head) + rest
 
 
 def _inject_bin_override_if_needed(
