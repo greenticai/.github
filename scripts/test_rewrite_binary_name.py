@@ -1052,6 +1052,266 @@ path = "src/main.rs"
     print("OK  test_dual_role_copy_has_binstall_metadata")
 
 
+def test_lib_name_pinned_when_lib_rs_exists() -> None:
+    """Crate with src/lib.rs but no [lib] table gains an explicit [lib] name pin.
+
+    Without the pin, cargo derives the lib name from [package].name. Once we
+    rename the package to <crate>-dev, the auto-derived lib name silently
+    becomes <crate>_dev — breaking every `use <crate>::...` import in the
+    same crate's bin source. Reproduces the gtc-dev source-build failure.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-flow"
+version = "0.4.2"
+edition = "2024"
+
+[[bin]]
+name = "greentic-flow"
+path = "src/bin/greentic-flow.rs"
+""",
+        )
+        _write(root, "src/lib.rs", "pub fn hello() {}\n")
+        _write(root, "src/bin/greentic-flow.rs", "fn main() {}\n")
+
+        _run(root, "greentic-flow")
+
+        data = _load(root / "Cargo.toml")
+        _assert(
+            data["package"]["name"] == "greentic-flow-dev",
+            f"expected package renamed, got {data['package']['name']!r}",
+        )
+        _assert("lib" in data, "expected [lib] section injected")
+        _assert(
+            data["lib"].get("name") == "greentic_flow",
+            f"expected [lib].name='greentic_flow' (dash-to-underscore), got {data['lib'].get('name')!r}",
+        )
+    print("OK  test_lib_name_pinned_when_lib_rs_exists")
+
+
+def test_lib_no_inject_when_no_lib_rs() -> None:
+    """Pure binary crate (no src/lib.rs) must not gain a [lib] section.
+
+    Injecting [lib] when there's no lib source would make cargo error with
+    'can't find crate root for `lib`'.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-mcp"
+version = "0.5.1"
+edition = "2024"
+
+[[bin]]
+name = "greentic-mcp"
+path = "src/bin/greentic-mcp.rs"
+""",
+        )
+        _write(root, "src/bin/greentic-mcp.rs", "fn main() {}\n")
+
+        _run(root, "greentic-mcp")
+
+        data = _load(root / "Cargo.toml")
+        _assert(
+            "lib" not in data,
+            f"binary-only crate must not gain [lib], got {data.get('lib')!r}",
+        )
+    print("OK  test_lib_no_inject_when_no_lib_rs")
+
+
+def test_lib_existing_not_overwritten() -> None:
+    """Crate with explicit [lib] is left alone — author opted out of auto-discovery."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-pack"
+version = "0.5.0"
+edition = "2024"
+
+[lib]
+name = "packlib"
+path = "src/packlib.rs"
+
+[[bin]]
+name = "greentic-pack"
+path = "src/bin/greentic-pack.rs"
+""",
+        )
+        _write(root, "src/lib.rs", "pub fn hello() {}\n")
+        _write(root, "src/packlib.rs", "pub fn hello() {}\n")
+        _write(root, "src/bin/greentic-pack.rs", "fn main() {}\n")
+
+        _run(root, "greentic-pack")
+
+        data = _load(root / "Cargo.toml")
+        lib = data.get("lib", {})
+        _assert(
+            lib.get("name") == "packlib",
+            f"author-supplied [lib].name must survive, got {lib.get('name')!r}",
+        )
+        _assert(
+            lib.get("path") == "src/packlib.rs",
+            f"author-supplied [lib].path must survive, got {lib.get('path')!r}",
+        )
+    print("OK  test_lib_existing_not_overwritten")
+
+
+def test_dual_role_overrides_author_binstall() -> None:
+    """Dual-role mode replaces any author-supplied [package.metadata.binstall].
+
+    The author block is configured for the stable release tag/archive layout
+    and won't match dev-release-binaries.yml output. The staged copy is
+    ephemeral (one publish, then discarded), so we override unconditionally.
+    The original Cargo.toml on develop stays untouched — verified separately.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "gtc"
+version = "1.1.0"
+edition = "2024"
+repository = "https://github.com/greenticai/greentic"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "gtc-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[[bin]]
+name = "gtc"
+path = "src/bin/gtc.rs"
+""",
+        )
+        _write(root, "src/bin/gtc.rs", "fn main() {}\n")
+
+        _run(root, "gtc", "--dual-role")
+
+        # Original stays as the author wrote it.
+        orig = _load(root / "Cargo.toml")
+        orig_binstall = orig["package"]["metadata"]["binstall"]
+        _assert(
+            orig_binstall["bin-dir"] == "gtc-{ target }/{ bin }{ binary-ext }",
+            "original Cargo.toml must keep author binstall intact",
+        )
+        _assert(
+            "overrides" in orig_binstall,
+            "original Cargo.toml must keep [...binstall.overrides.*] sub-tables",
+        )
+
+        # Staged copy gets the dev-pipeline-compatible layout, no overrides.
+        copy = _load(root / "target" / "bifurcate" / "gtc-dev" / "Cargo.toml")
+        copy_binstall = copy["package"]["metadata"]["binstall"]
+        _assert(
+            copy_binstall["pkg-url"]
+            == "{ repo }/releases/download/v{ version }/"
+            "{ name }-v{ version }-{ target }{ archive-suffix }",
+            f"copy pkg-url not the dev layout: {copy_binstall.get('pkg-url')!r}",
+        )
+        _assert(
+            copy_binstall["bin-dir"]
+            == "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }",
+            f"copy bin-dir not the dev layout: {copy_binstall.get('bin-dir')!r}",
+        )
+        _assert(
+            "overrides" not in copy_binstall,
+            f"author overrides must be dropped on the dev copy, got {copy_binstall!r}",
+        )
+    print("OK  test_dual_role_overrides_author_binstall")
+
+
+def test_dual_role_gtc_shape_end_to_end() -> None:
+    """End-to-end: gtc's exact layout (inline bin array at root + src/lib.rs +
+    author binstall + bin uses `use <crate>::...`) must produce a staged copy
+    where (a) [package].name='gtc-dev', (b) inline bin renamed to 'gtc-dev',
+    (c) [lib].name pinned to 'gtc' so internal imports resolve, and
+    (d) binstall metadata is the dev-pipeline layout, not the author's.
+
+    Reproduces the failure mode of run 25052566037 / gtc-dev v1.1.25053490868.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+bin = [
+    { name = "gtc", path = "src/bin/gtc.rs" },
+]
+bench = [
+    { name = "perf", harness = false },
+]
+
+[package]
+name = "gtc"
+version = "1.1.0-dev.0"
+edition = "2024"
+repository = "https://github.com/greenticai/greentic"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "gtc-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[dependencies]
+anyhow = "1"
+""",
+        )
+        _write(root, "src/lib.rs", "pub mod error { pub struct GtcError; }\n")
+        _write(
+            root,
+            "src/bin/gtc.rs",
+            "use gtc::error::GtcError;\nfn main() { let _ = GtcError; }\n",
+        )
+
+        _run(root, "gtc", "--dual-role")
+
+        copy = _load(root / "target" / "bifurcate" / "gtc-dev" / "Cargo.toml")
+        _assert(
+            copy["package"]["name"] == "gtc-dev",
+            f"package renamed, got {copy['package']['name']!r}",
+        )
+        bin_names = sorted(b["name"] for b in copy.get("bin", []))
+        _assert(
+            bin_names == ["gtc-dev"],
+            f"inline bin renamed, got {bin_names}",
+        )
+        _assert(
+            copy.get("lib", {}).get("name") == "gtc",
+            f"lib name pinned to original, got {copy.get('lib')!r}",
+        )
+        binstall = copy["package"]["metadata"]["binstall"]
+        _assert(
+            binstall["pkg-url"].endswith("-{ target }{ archive-suffix }"),
+            f"binstall forced to dev layout, got {binstall.get('pkg-url')!r}",
+        )
+        _assert(
+            binstall["bin-dir"]
+            == "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }",
+            f"binstall bin-dir forced to dev layout, got {binstall.get('bin-dir')!r}",
+        )
+    print("OK  test_dual_role_gtc_shape_end_to_end")
+
+
 def main() -> int:
     test_single_crate_root()
     test_sub_crate_in_workspace()
@@ -1076,6 +1336,11 @@ def main() -> int:
     test_binstall_injection_idempotent()
     test_binstall_existing_not_overwritten()
     test_dual_role_copy_has_binstall_metadata()
+    test_lib_name_pinned_when_lib_rs_exists()
+    test_lib_no_inject_when_no_lib_rs()
+    test_lib_existing_not_overwritten()
+    test_dual_role_overrides_author_binstall()
+    test_dual_role_gtc_shape_end_to_end()
     print()
     print("all tests passed")
     return 0
