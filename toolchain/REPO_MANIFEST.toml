@@ -618,7 +618,7 @@ crates-publish-mode = "embedded"  # crates publish is embedded in release-binari
 binary-crates = ["greentic-dev"]
 dual-role-binary-crates = ["greentic-dev"]
 setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow greentic-component greentic-pack --force"
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
