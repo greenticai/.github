@@ -1239,6 +1239,125 @@ path = "src/bin/gtc.rs"
     print("OK  test_dual_role_overrides_author_binstall")
 
 
+def test_default_run_rewritten_when_matches_crate() -> None:
+    """`default-run = "<crate>"` in [package] must be rewritten to "<crate>-dev".
+
+    Reproduces the greentic-component layout: the package has both a
+    matching [[bin]] (auto-discovered from src/bin/<crate>.rs) AND a
+    `default-run = "<crate>"` selector. After the bin gets renamed to
+    <crate>-dev, default-run must follow or cargo errors with
+    `default-run target '<crate>' not found`.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-component"
+version = "0.6.0-dev.0"
+edition = "2024"
+default-run = "greentic-component"
+
+[lib]
+name = "greentic_component"
+path = "src/lib.rs"
+""",
+        )
+        _write(root, "src/lib.rs", "pub fn hello() {}\n")
+        _write(root, "src/bin/greentic-component.rs", "fn main() {}\n")
+        _write(root, "src/bin/component-doctor.rs", "fn main() {}\n")
+
+        _run(root, "greentic-component")
+
+        data = _load(root / "Cargo.toml")
+        _assert(
+            data["package"]["name"] == "greentic-component-dev",
+            f"expected package renamed, got {data['package']['name']!r}",
+        )
+        _assert(
+            data["package"].get("default-run") == "greentic-component-dev",
+            f"expected default-run rewritten, got {data['package'].get('default-run')!r}",
+        )
+    print("OK  test_default_run_rewritten_when_matches_crate")
+
+
+def test_default_run_unrelated_left_alone() -> None:
+    """`default-run` pointing at a bin OTHER than the crate name must not be touched."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "greentic-component"
+version = "0.6.0-dev.0"
+edition = "2024"
+default-run = "component-doctor"
+
+[[bin]]
+name = "greentic-component"
+path = "src/bin/greentic-component.rs"
+
+[[bin]]
+name = "component-doctor"
+path = "src/bin/component-doctor.rs"
+""",
+        )
+
+        _run(root, "greentic-component")
+
+        data = _load(root / "Cargo.toml")
+        _assert(
+            data["package"].get("default-run") == "component-doctor",
+            f"unrelated default-run must survive, got {data['package'].get('default-run')!r}",
+        )
+        # And the matching bin must still be renamed.
+        names = sorted(b["name"] for b in data["bin"])
+        _assert(
+            names == ["component-doctor", "greentic-component-dev"],
+            f"expected bins ['component-doctor', 'greentic-component-dev'], got {names}",
+        )
+    print("OK  test_default_run_unrelated_left_alone")
+
+
+def test_default_run_in_workspace_not_touched() -> None:
+    """`default-run` in [workspace.package] (or other non-[package] tables) must be ignored.
+
+    `default-run` is package-level only — cargo doesn't honor it on workspace
+    tables — but the script's state machine must still skip it to avoid
+    false-positive rewrites.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.custom]
+default-run = "mycrate"
+""",
+        )
+
+        _run(root, "mycrate")
+
+        text = (root / "Cargo.toml").read_text()
+        _assert(
+            'default-run = "mycrate"' in text,
+            "default-run inside [package.metadata.custom] must not be rewritten",
+        )
+        data = _load(root / "Cargo.toml")
+        _assert(data["package"]["name"] == "mycrate-dev", "package.name still rewritten")
+    print("OK  test_default_run_in_workspace_not_touched")
+
+
 def test_dual_role_gtc_shape_end_to_end() -> None:
     """End-to-end: gtc's exact layout (inline bin array at root + src/lib.rs +
     author binstall + bin uses `use <crate>::...`) must produce a staged copy
@@ -1340,6 +1459,9 @@ def main() -> int:
     test_lib_no_inject_when_no_lib_rs()
     test_lib_existing_not_overwritten()
     test_dual_role_overrides_author_binstall()
+    test_default_run_rewritten_when_matches_crate()
+    test_default_run_unrelated_left_alone()
+    test_default_run_in_workspace_not_touched()
     test_dual_role_gtc_shape_end_to_end()
     print()
     print("all tests passed")
