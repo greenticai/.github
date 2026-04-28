@@ -1,6 +1,20 @@
 # REPO_MANIFEST.toml — Canonical registry of all Greentic Rust repos.
-# Single source of truth for toolchain variants, dependency tiers, crate publish
-# lists, and version-track configuration.
+#
+# Source of truth for: org assignment, toolchain variant, crate publish lists,
+# version-track configuration, archive / dev-publish / weekly-stable flags,
+# and binary-bifurcation classification.
+#
+# Tiers are NOT authoritative here. They are derived from the on-disk
+# cross-repo Rust dependency graph by `dep-graph/build_graph.py`; the graph
+# (`dep-graph/graph.json`) is the source of truth and `tier = N` here is a
+# cached value. To resync after Cargo.toml changes:
+#
+#     python3 dep-graph/build_graph.py
+#     # then propagate repos.<name>.tier from graph.json into this file.
+#
+# If a tier value here looks wrong, fix the underlying dependency in the
+# offending Cargo.toml and rerun the graph — do NOT hand-edit `tier = N`
+# to override.
 #
 # Used by: sync-toolchain.sh, onboard-repo.sh, branch-develop.sh,
 #          sync-dev-publish.sh, nightly-develop.yml, weekly-stable-*.yml
@@ -8,7 +22,7 @@
 # Fields:
 #   org                      — GitHub org (greenticai | greentic-biz)
 #   variant                  — Toolchain variant (host | wasm)
-#   tier                     — Dependency tier (0-8). Lower tiers publish first.
+#   tier                     — Dependency tier (graph-derived). Lower tiers publish first.
 #   publishes                — Ordered crate list for cargo publish. Empty = no publish.
 #   version-track            — { from, to } for version bumping. Omit to skip bumping.
 #   dev-publish-enabled      — Progressive rollout flag for nightly CodeArtifact builds.
@@ -20,26 +34,91 @@
 #   dual-role-binary-crates  — Subset of `binary-crates` that ALSO publish a library under
 #                              the same `[package].name`. Library keeps publishing as `<name>`;
 #                              binary gets a sibling `<name>-dev` copy-publish.
+#
+# Layout: sections grouped by graph-derived tier, alphabetical within tier.
+# Archived repos are placed at the end regardless of tier.
 
-# ─── Tier 0 — Foundation ────────────────────────────────────────
 
-[repos.greentic-types]
-org = "greenticai"
+# ─── Tier 0 — No internal deps (foundation primitives, standalone tools) ────
+
+[repos.customers-tools]
+org = "greentic-biz"
 variant = "host"
 tier = 0
-publishes = ["greentic-types-macros", "greentic-types"]
+publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-interfaces]
-org = "greenticai"
+[repos.greentic-adaptive-card-mcp]
+org = "greentic-biz"
 variant = "host"
 tier = 0
-publishes = ["greentic-interfaces", "greentic-interfaces-guest", "greentic-interfaces-wasmtime", "greentic-interfaces-host"]
+publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
+
+[repos.greentic-cap]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-cap-types", "greentic-cap-profile", "greentic-cap-resolver", "greentic-cap-schema", "greentic-cap-core", "greentic-cap"]
+version-track = { from = "0.5", to = "0.6" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-coding-agent]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = []  # internal coding-agent scaffold; all crates set publish = false
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
+
+[repos.greentic-designer-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 0
+publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
+version-track = { from = "0.2", to = "0.3" }
+weekly-stable-enabled = false
+
+[repos.greentic-i18n]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-i18n-lib", "greentic-i18n-translator"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-perf]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = []  # perf tests, not published
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-sorla-providers]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = []  # SoRLa provider family
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-store-server]
+org = "greentic-biz"
+variant = "host"
+tier = 0
+publishes = []  # service binary, deployed via Docker — not a crates.io crate
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
 
 [repos.greentic-telemetry]
 org = "greenticai"
@@ -50,11 +129,11 @@ version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-i18n]
+[repos.greentic-test-types]
 org = "greenticai"
 variant = "host"
 tier = 0
-publishes = ["greentic-i18n-lib", "greentic-i18n-translator"]
+publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -69,13 +148,214 @@ publishes = ["serde_yaml_gtc"]
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-# ─── Tier 1 — Core ──────────────────────────────────────────────
+# ─── Tier 1 — Atop tier 0 only (types, dw, ext-bundles, test fixtures) ──────
+
+[repos.greentic-deployer-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 1
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
+[repos.greentic-dw]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["greentic-dw-context", "greentic-dw-delegation", "greentic-dw-planning", "greentic-dw-reflection", "greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-workspace", "greentic-dw-runtime", "greentic-dw-cli"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+version-track = { from = "0.5", to = "0.6" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-provider-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 1
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+
+[repos.greentic-test-flow-a]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = []  # test fixtures
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-test-flow-b]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = []  # test fixtures
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-types]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["greentic-types-macros", "greentic-types"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Tier 2 — Interfaces & config ───────────────────────────────────────────
+
+[repos.component-templates]
+org = "greenticai"
+variant = "wasm"
+tier = 2
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
 
 [repos.greentic-config]
 org = "greenticai"
 variant = "host"
-tier = 1
+tier = 2
 publishes = ["greentic-config-types", "greentic-config"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-interfaces]
+org = "greenticai"
+variant = "host"
+tier = 2
+publishes = ["greentic-interfaces", "greentic-interfaces-guest", "greentic-interfaces-wasmtime", "greentic-interfaces-host"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Tier 3 — Core libraries (state, secrets, oauth, qa, mcp, session, simple components) ──
+
+[repos.component-adaptive-card]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.component-fast2flow]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.component-flow2flow]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.component-llm-openai]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.component-oauth-card]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.component-script-rhai]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.components-public]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-control-chain]
+org = "greenticai"
+variant = "host"
+tier = 3
+publishes = []  # populate before deploying dev-publish
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-dwbase]
+org = "greenticai"
+variant = "host"
+tier = 3
+publishes = ["dwbase-core", "dwbase-metrics", "dwbase-engine", "dwbase-storage-sled", "dwbase-vector-hnsw", "dwbase-stream-local", "dwbase-security", "dwbase-embedder-dummy", "dwbase-swarm", "dwbase-swarm-nats", "dwbase-node", "dwbase-cli", "dwbase-pack-runner"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on cli-binaries)
+binary-crates = ["dwbase-cli", "dwbase-node", "dwbase-pack-runner"]
+dual-role-binary-crates = []
+exclude-crates = ["component-dwbase"]
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-mcp]
+org = "greenticai"
+variant = "host"
+tier = 3
+publishes = ["greentic-mcp-exec", "greentic-mcp"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-mcp-exec", "greentic-mcp"]
+dual-role-binary-crates = ["greentic-mcp-exec", "greentic-mcp"]
+exclude-crates = ["greentic-mcp-adapter"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-oauth]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = ["greentic-oauth-core", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
+exclude-crates = ["oidc-ingress", "oidc-provider-runtime"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-qa]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = ["qa-spec", "component-qa", "greentic-qa-lib"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-secrets]
+org = "greenticai"
+variant = "host"
+tier = 3
+publishes = []  # application/hybrid repo — no crates.io publish, tag-only
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -83,7 +363,7 @@ weekly-stable-enabled = true
 [repos.greentic-session]
 org = "greenticai"
 variant = "host"
-tier = 1
+tier = 3
 publishes = ["greentic-session"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -92,157 +372,20 @@ weekly-stable-enabled = true
 [repos.greentic-state]
 org = "greenticai"
 variant = "host"
-tier = 1
+tier = 3
 publishes = ["greentic-state"]
 exclude-crates = ["state-provider-redis", "state-provider-memory"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-secrets]
-org = "greenticai"
-variant = "host"
-tier = 1
-publishes = []  # application/hybrid repo — no crates.io publish, tag-only
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
+# ─── Tier 4 — Distribution client & business providers ──────────────────────
 
-[repos.greentic-component]
-org = "greenticai"
-variant = "wasm"
-tier = 1
-publishes = ["greentic-component-manifest", "greentic-component-store", "greentic-component-runtime", "greentic-component"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-distributor-client]
-org = "greenticai"
-variant = "host"
-tier = 1
-publishes = ["greentic-distributor-client", "greentic-distributor-dev"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-qa]
-org = "greenticai"
-variant = "wasm"
-tier = 1
-publishes = ["qa-spec", "component-qa", "greentic-qa-lib"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-cap]
-org = "greenticai"
-variant = "host"
-tier = 1
-publishes = ["greentic-cap-types", "greentic-cap-profile", "greentic-cap-resolver", "greentic-cap-schema", "greentic-cap-core", "greentic-cap"]
-version-track = { from = "0.5", to = "0.6" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-# ─── Tier 2 — Flow + OAuth ──────────────────────────────────────
-
-[repos.greentic-flow]
-org = "greenticai"
-variant = "host"
-tier = 2
-publishes = ["greentic-flow"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-flow"]
-dual-role-binary-crates = ["greentic-flow"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-oauth]
-org = "greenticai"
-variant = "wasm"
-tier = 2
-publishes = ["greentic-oauth-core", "greentic-oauth-host", "greentic-oauth-sdk", "greentic-oauth-client"]
-exclude-crates = ["oidc-ingress", "oidc-provider-runtime"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-sorla]
-org = "greenticai"
-variant = "host"
-tier = 2
-publishes = ["greentic-sorla"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-sorla"]
-dual-role-binary-crates = ["greentic-sorla"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-# ─── Tier 3 — Packaging ─────────────────────────────────────────
-
-[repos.greentic-pack]
-org = "greenticai"
-variant = "wasm"
-tier = 3
-publishes = ["greentic-pack-lib", "pack_component", "pack_component_template", "greentic-pack"]
-exclude-crates = ["pack_component"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-bundle]
-org = "greenticai"
-variant = "host"
-tier = 3
-publishes = ["bundle-standard-core", "greentic-bundle-reader", "greentic-bundle"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-bundle"]
-dual-role-binary-crates = ["greentic-bundle"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-cards2pack]
-org = "greenticai"
-variant = "host"
-tier = 3
-publishes = ["greentic-cards2pack"]
-setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow --force"
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-# ─── Tier 4 — Runtime ───────────────────────────────────────────
-
-[repos.greentic-runner]
-org = "greenticai"
+[repos.commercial-components]
+org = "greentic-biz"
 variant = "wasm"
 tier = 4
-publishes = ["runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-runner"]
-dual-role-binary-crates = ["greentic-runner"]
-exclude-crates = ["echo-secret", "component-v0-6-dummy"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-messaging-providers]
-org = "greenticai"
-variant = "wasm"
-tier = 4
-publishes = []  # WASM provider components
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-events-providers]
-org = "greenticai"
-variant = "wasm"
-tier = 4
-publishes = []  # WASM provider components
+publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -256,150 +399,47 @@ version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-start]
-org = "greenticai"
-variant = "host"
-tier = 4
-publishes = ["greentic-start"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-start"]
-dual-role-binary-crates = ["greentic-start"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-operator]
-org = "greenticai"
-variant = "host"
-tier = 4
-publishes = ["greentic-operator"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-operator"]
-dual-role-binary-crates = ["greentic-operator"]
-exclude-crates = ["secret_name", "greentic-secrets-repro"]
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-control-chain]
-org = "greenticai"
-variant = "host"
+[repos.greentic-card]
+org = "greentic-biz"
+variant = "wasm"
 tier = 4
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-mcp]
+[repos.greentic-distributor-client]
 org = "greenticai"
 variant = "host"
 tier = 4
-publishes = ["greentic-mcp-exec", "greentic-mcp"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-mcp-exec", "greentic-mcp"]
-dual-role-binary-crates = ["greentic-mcp-exec", "greentic-mcp"]
-exclude-crates = ["greentic-mcp-adapter"]
+publishes = ["greentic-distributor-client", "greentic-distributor-dev"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-gui]
+[repos.greentic-events-providers]
 org = "greenticai"
-variant = "host"
-tier = 4
-publishes = ["greentic-gui"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-gui"]
-dual-role-binary-crates = []
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-dwbase]
-org = "greenticai"
-variant = "host"
-tier = 4
-publishes = ["dwbase-core", "dwbase-metrics", "dwbase-engine", "dwbase-storage-sled", "dwbase-vector-hnsw", "dwbase-stream-local", "dwbase-security", "dwbase-embedder-dummy", "dwbase-swarm", "dwbase-swarm-nats", "dwbase-node", "dwbase-cli", "dwbase-pack-runner"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on cli-binaries)
-binary-crates = ["dwbase-cli", "dwbase-node", "dwbase-pack-runner"]
-dual-role-binary-crates = []
-exclude-crates = ["component-dwbase"]
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-dw]
-org = "greenticai"
-variant = "host"
-tier = 4
-publishes = ["greentic-dw-context", "greentic-dw-delegation", "greentic-dw-planning", "greentic-dw-reflection", "greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-workspace", "greentic-dw-runtime", "greentic-dw-cli"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-version-track = { from = "0.5", to = "0.6" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-dw-providers]
-org = "greenticai"
-variant = "host"
+variant = "wasm"
 tier = 4
 publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-sorla-providers]
-org = "greenticai"
-variant = "host"
+[repos.greentic-fast2flow]
+org = "greentic-biz"
+variant = "wasm"
 tier = 4
-publishes = []  # SoRLa provider family
+publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-# ─── Tier 5 — CLI / Tooling ─────────────────────────────────────
-
-[repos.greentic-coding-agent]
-org = "greenticai"
-variant = "host"
-tier = 5
-publishes = []  # internal coding-agent scaffold; all crates set publish = false
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
-
-[repos.greentic]
-org = "greenticai"
-variant = "host"
-tier = 5
-publishes = ["gtc"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on github_release)
-binary-crates = ["gtc"]
-dual-role-binary-crates = ["gtc"]  # gtc has a lib surface; dual-role avoids rewriting internal `use gtc::` imports
-version-track = { from = "1.0", to = "1.1" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-dev]
-org = "greenticai"
-variant = "host"
-tier = 5
-publishes = ["greentic-dev"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-dev"]
-dual-role-binary-crates = ["greentic-dev"]
-setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow greentic-component greentic-pack --force"
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-setup]
-org = "greenticai"
-variant = "host"
-tier = 5
-publishes = ["greentic-setup"]
-crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-binary-crates = ["greentic-setup"]
-dual-role-binary-crates = ["greentic-setup"]
+[repos.greentic-mcp-generator]
+org = "greentic-biz"
+variant = "wasm"
+tier = 4
+publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -407,11 +447,46 @@ weekly-stable-enabled = true
 [repos.greentic-provision]
 org = "greenticai"
 variant = "host"
-tier = 5
+tier = 4
 publishes = ["greentic-provision-core", "greentic-provision"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-provision"]
 dual-role-binary-crates = []
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-sorla]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = ["greentic-sorla"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-sorla"]
+dual-role-binary-crates = ["greentic-sorla"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Tier 5 — Authoring stack (flow, bundle, deployer, GUI, setup, components) ──
+
+[repos.greentic-bundle]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = ["bundle-standard-core", "greentic-bundle-reader", "greentic-bundle"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-bundle"]
+dual-role-binary-crates = ["greentic-bundle"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-component]
+org = "greenticai"
+variant = "wasm"
+tier = 5
+publishes = ["greentic-component-manifest", "greentic-component-store", "greentic-component-runtime", "greentic-component"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -428,105 +503,26 @@ version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-# ─── Tier 6 — Components (WASM, no publish) ─────────────────────
-
-[repos.component-adaptive-card]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-deployer]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-fast2flow]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-flow2flow]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-llm-openai]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-oauth-card]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-script-rhai]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.component-templates]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.components-public]
-org = "greenticai"
-variant = "wasm"
-tier = 6
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-# ─── Tier 7 — Extensions / Testing ──────────────────────────────
-
-[repos.greentic-x]
+[repos.greentic-flow]
 org = "greenticai"
 variant = "host"
-tier = 7
-publishes = []  # populate before deploying dev-publish
+tier = 5
+publishes = ["greentic-flow"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-flow"]
+dual-role-binary-crates = ["greentic-flow"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-conformance]
+[repos.greentic-gui]
 org = "greenticai"
 variant = "host"
-tier = 7
-publishes = []  # test suites, not published
+tier = 5
+publishes = ["greentic-gui"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-gui"]
+dual-role-binary-crates = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -534,109 +530,59 @@ weekly-stable-enabled = true
 [repos.greentic-integration]
 org = "greenticai"
 variant = "host"
-tier = 7
+tier = 5
 publishes = []  # test harness, not published
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-perf]
+[repos.greentic-setup]
 org = "greenticai"
 variant = "host"
-tier = 7
-publishes = []  # perf tests, not published
+tier = 5
+publishes = ["greentic-setup"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-setup"]
+dual-role-binary-crates = ["greentic-setup"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-redbutton]
+[repos.greentic-x]
 org = "greenticai"
 variant = "host"
-tier = 7
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-demo]
-org = "greenticai"
-variant = "host"
-tier = 8
-publishes = []  # demo bundles, not published
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-test-flow-a]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []  # test fixtures
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-test-flow-b]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []  # test fixtures
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-test-types]
-org = "greenticai"
-variant = "host"
-tier = 7
-publishes = []  # test fixtures
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-# ─── Tier 8 — Business (greentic-biz org) ───────────────────────
-
-[repos.greentic-mcp-generator]
-org = "greentic-biz"
-variant = "wasm"
-tier = 8
+tier = 5
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-fast2flow]
+# ─── Tier 6 — Packaging (pack, cards2pack, bundle-extensions, telco-x) ──────
+
+[repos.greentic-bundle-extensions]
 org = "greentic-biz"
 variant = "wasm"
-tier = 8
-publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
+tier = 6
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
 
-[repos.greentic-card]
-org = "greentic-biz"
-variant = "wasm"
-tier = 8
-publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.commercial-components]
-org = "greentic-biz"
-variant = "wasm"
-tier = 8
-publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.customers-tools]
-org = "greentic-biz"
+[repos.greentic-cards2pack]
+org = "greenticai"
 variant = "host"
-tier = 8
-publishes = []
+tier = 6
+publishes = ["greentic-cards2pack"]
+setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow --force"
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-pack]
+org = "greenticai"
+variant = "wasm"
+tier = 6
+publishes = ["greentic-pack-lib", "pack_component", "pack_component_template", "greentic-pack"]
+exclude-crates = ["pack_component"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
@@ -646,9 +592,75 @@ weekly-stable-enabled = true
 [repos.telco-x]
 org = "greentic-biz"
 variant = "host"
-tier = 7
+tier = 6
 publishes = []
 version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Tier 7 — Runtime engines + designer + dev tooling ──────────────────────
+
+[repos.greentic-designer]
+org = "greentic-biz"
+variant = "host"
+tier = 7
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-dev]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = ["greentic-dev"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-dev"]
+dual-role-binary-crates = ["greentic-dev"]
+setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow greentic-component greentic-pack --force"
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-dw-providers]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = []  # WASM provider components
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-runner]
+org = "greenticai"
+variant = "wasm"
+tier = 7
+publishes = ["runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-runner"]
+dual-role-binary-crates = ["greentic-runner"]
+exclude-crates = ["echo-secret", "component-v0-6-dummy"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Tier 8 — Operators, ingress, conformance & messaging-providers ─────────
+
+[repos.component-deployer]
+org = "greenticai"
+variant = "wasm"
+tier = 8
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-conformance]
+org = "greenticai"
+variant = "host"
+tier = 8
+publishes = []  # test suites, not published
+version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
@@ -661,21 +673,107 @@ version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-[repos.greentic-adaptive-card-mcp]
-org = "greentic-biz"
-variant = "host"
+[repos.greentic-messaging-providers]
+org = "greenticai"
+variant = "wasm"
 tier = 8
-publishes = []  # populate before deploying dev-publish
+publishes = []  # WASM provider components
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
-# ─── Archived (read-only, skipped by all scripts) ───────────────
+[repos.greentic-operator]
+org = "greenticai"
+variant = "host"
+tier = 8
+publishes = ["greentic-operator"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-operator"]
+dual-role-binary-crates = ["greentic-operator"]
+exclude-crates = ["secret_name", "greentic-secrets-repro"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-redbutton]
+org = "greenticai"
+variant = "host"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-start]
+org = "greenticai"
+variant = "host"
+tier = 8
+publishes = ["greentic-start"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
+binary-crates = ["greentic-start"]
+dual-role-binary-crates = ["greentic-start"]
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Tier 9 — Top-level CLI & demos ─────────────────────────────────────────
+
+[repos.greentic]
+org = "greenticai"
+variant = "host"
+tier = 9
+publishes = ["gtc"]
+crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on github_release)
+binary-crates = ["gtc"]
+dual-role-binary-crates = ["gtc"]  # gtc has a lib surface; dual-role avoids rewriting internal `use gtc::` imports
+version-track = { from = "1.0", to = "1.1" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+[repos.greentic-demo]
+org = "greenticai"
+variant = "host"
+tier = 9
+publishes = []  # demo bundles, not published
+version-track = { from = "0.4", to = "0.5" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+
+# ─── Archived (read-only, skipped by all scripts) ───────────────────────────
+
+[repos.greentic-designer-extension-action]
+org = "greenticai"
+variant = "host"  # placeholder: repo is a composite GitHub Action (action.yml + bash)
+tier = 0
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
+# Excluded from Rust toolchain sync + publish automation: no Cargo.toml.
+# Versioned via manually curated v1 major tag + v1.x.x release tags.
+archived = true
 
 [repos.greentic-distributor]
 org = "greentic-biz"
 variant = "host"
 tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
+
+[repos.greentic-events]
+org = "greenticai"
+variant = "host"
+tier = 4
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
+archived = true
+
+[repos.greentic-messaging]
+org = "greenticai"
+variant = "host"
+tier = 4
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
@@ -697,82 +795,4 @@ tier = 8
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
-archived = true
-
-[repos.greentic-messaging]
-org = "greenticai"
-variant = "host"
-tier = 4
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-archived = true
-
-[repos.greentic-events]
-org = "greenticai"
-variant = "host"
-tier = 4
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
-archived = true
-
-[repos.greentic-designer]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-designer-extensions]
-org = "greentic-biz"
-variant = "wasm"
-tier = 2
-publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
-version-track = { from = "0.2", to = "0.3" }
-weekly-stable-enabled = false
-
-[repos.greentic-bundle-extensions]
-org = "greentic-biz"
-variant = "wasm"
-tier = 8
-publishes = []  # reference-extensions ship via Greentic Store, not crates.io
-version-track = { from = "0.1", to = "0.2" }
-weekly-stable-enabled = false
-
-[repos.greentic-provider-extensions]
-org = "greentic-biz"
-variant = "wasm"
-tier = 8
-publishes = []  # reference-extensions ship via Greentic Store, not crates.io
-version-track = { from = "0.1", to = "0.2" }
-weekly-stable-enabled = false
-
-[repos.greentic-deployer-extensions]
-org = "greentic-biz"
-variant = "wasm"
-tier = 8
-publishes = []  # reference-extensions ship via Greentic Store, not crates.io
-version-track = { from = "0.1", to = "0.2" }
-weekly-stable-enabled = false
-
-[repos.greentic-store-server]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []  # service binary, deployed via Docker — not a crates.io crate
-version-track = { from = "0.1", to = "0.2" }
-weekly-stable-enabled = false
-
-[repos.greentic-designer-extension-action]
-org = "greenticai"
-variant = "host"  # placeholder: repo is a composite GitHub Action (action.yml + bash)
-tier = 7
-publishes = []
-version-track = { from = "0.1", to = "0.2" }
-weekly-stable-enabled = false
-# Excluded from Rust toolchain sync + publish automation: no Cargo.toml.
-# Versioned via manually curated v1 major tag + v1.x.x release tags.
 archived = true
