@@ -105,16 +105,24 @@ def find_crate_manifest(workdir: Path, crate: str, new_name: str) -> Path:
 
 
 def _rewrite_text(text: str, crate: str, new_name: str) -> str:
-    """Rewrite [package].name and matching [[bin]].name in-line.
+    """Rewrite [package].name, [package].default-run, and matching [[bin]].name in-line.
 
     State machine: track the current table header; only rewrite when inside
     [package] (exactly, not a sub-table) or inside any [[bin]] block where
     the block's `name` key matches <crate>.
+
+    `default-run` is rewritten only inside [package] and only when it points
+    at <crate>. Without this, renaming the matching [[bin]] from <crate> to
+    <new_name> would leave default-run referencing a bin that no longer
+    exists, and `cargo` errors with `default-run target '<crate>' not found`.
     """
     header_table = re.compile(r"^\[([^\[\]]+)\]\s*(?:#.*)?$")
     header_aot = re.compile(r"^\[\[([^\[\]]+)\]\]\s*(?:#.*)?$")
     name_line = re.compile(
         r'^(?P<prefix>\s*name\s*=\s*)"' + re.escape(crate) + r'"(?P<suffix>.*)$'
+    )
+    default_run_line = re.compile(
+        r'^(?P<prefix>\s*default-run\s*=\s*)"' + re.escape(crate) + r'"(?P<suffix>.*)$'
     )
 
     lines = text.splitlines(keepends=True)
@@ -122,9 +130,10 @@ def _rewrite_text(text: str, crate: str, new_name: str) -> str:
     current_is_aot = False
     current_aot_kind = ""
 
-    def in_target_section() -> bool:
-        if current_is_aot and current_aot_kind == "bin":
-            return True
+    def in_bin_section() -> bool:
+        return current_is_aot and current_aot_kind == "bin"
+
+    def in_package_section() -> bool:
         return (not current_is_aot) and current_table == "package"
 
     for i, line in enumerate(lines):
@@ -141,16 +150,21 @@ def _rewrite_text(text: str, crate: str, new_name: str) -> str:
             current_is_aot = False
             current_table = m.group(1).strip()
             continue
-        if not in_target_section():
-            continue
         body = line.rstrip("\n")
         has_newline = line.endswith("\n")
-        m = name_line.match(body)
-        if not m:
-            continue
-        lines[i] = m.group("prefix") + f'"{new_name}"' + m.group("suffix") + (
-            "\n" if has_newline else ""
-        )
+        if in_bin_section() or in_package_section():
+            m = name_line.match(body)
+            if m:
+                lines[i] = m.group("prefix") + f'"{new_name}"' + m.group("suffix") + (
+                    "\n" if has_newline else ""
+                )
+                continue
+        if in_package_section():
+            m = default_run_line.match(body)
+            if m:
+                lines[i] = m.group("prefix") + f'"{new_name}"' + m.group("suffix") + (
+                    "\n" if has_newline else ""
+                )
 
     return "".join(lines)
 
