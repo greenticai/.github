@@ -355,8 +355,9 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "host"
 tier = 3
-publishes = ["greentic-secrets"]  # CLI binary only; provider crates + WASM components stay tag-only
+publishes = ["greentic-secrets-api", "greentic-secrets-spec", "greentic-secrets-provider-dev", "greentic-secrets-core", "greentic-secrets-provider-aws-sm", "greentic-secrets-provider-gcp-sm", "greentic-secrets-provider-azure-kv", "greentic-secrets-provider-k8s", "greentic-secrets-provider-vault-kv", "greentic-secrets-broker", "greentic-secrets-lib", "greentic-secrets"]
 binary-crates = ["greentic-secrets"]
+dual-role-binary-crates = ["greentic-secrets"]
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
