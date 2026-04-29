@@ -355,8 +355,9 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "host"
 tier = 3
-publishes = []  # application/hybrid repo — no crates.io publish, tag-only
-version-track = { from = "0.4", to = "0.5" }
+publishes = ["greentic-secrets"]  # CLI binary only; provider crates + WASM components stay tag-only
+binary-crates = ["greentic-secrets"]
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 
@@ -584,8 +585,10 @@ org = "greenticai"
 variant = "wasm"
 tier = 6
 publishes = ["greentic-pack-lib", "pack_component", "pack_component_template", "greentic-pack"]
+binary-crates = ["greentic-pack"]
+dual-role-binary-crates = ["greentic-pack"]
 exclude-crates = ["pack_component"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 

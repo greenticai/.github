@@ -40,6 +40,8 @@ BINARY_REPOS=(
     greentic-deployer
     greentic-dwbase
     greentic-component
+    greentic-pack
+    greentic-secrets
 )
 
 if [[ $# -gt 0 ]]; then
