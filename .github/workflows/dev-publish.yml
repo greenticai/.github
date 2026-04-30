@@ -270,7 +270,7 @@ jobs:
             else
               label="$arg"
             fi
-            local max_retries=3
+            local max_retries=5
             local delay=10
             local attempt=0
             local output=""
@@ -304,10 +304,30 @@ jobs:
               fi
 
               if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
-                echo "⚠ Transient error, retrying in ${delay}s..."
-                sleep "$delay"
-                delay=$((delay * 2))
-                [ "$delay" -gt 120 ] && delay=120
+                # crates.io 429 bodies carry a reset hint:
+                #   "Please try again after Mon, 27 Apr 2026 09:04:14 GMT".
+                # Sleep until that timestamp + a 5s buffer when parseable; otherwise
+                # fall back to exponential backoff.
+                local reset_str reset_epoch wait_s
+                reset_str=$(echo "$output" | sed -n 's/.*Please try again after \([^.]*GMT\).*/\1/p' | head -n 1)
+                wait_s=""
+                if [ -n "$reset_str" ]; then
+                  reset_epoch=$(date -u -d "$reset_str" +%s 2>/dev/null || true)
+                  if [ -n "$reset_epoch" ]; then
+                    wait_s=$((reset_epoch - $(date -u +%s) + 5))
+                    [ "$wait_s" -lt 5 ] && wait_s=5
+                    [ "$wait_s" -gt 180 ] && wait_s=180
+                  fi
+                fi
+                if [ -n "$wait_s" ]; then
+                  echo "⚠ Rate limited, sleeping ${wait_s}s until reset (${reset_str})..."
+                  sleep "$wait_s"
+                else
+                  echo "⚠ Transient error, retrying in ${delay}s..."
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                  [ "$delay" -gt 120 ] && delay=120
+                fi
                 continue
               fi
 
