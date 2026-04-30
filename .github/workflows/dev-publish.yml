@@ -148,7 +148,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Re-stamp bifurcate copies to binary-version
+      - name: Re-stamp binary crates to binary-version
         if: inputs.binary-crates != '' && inputs.binary-version != '' && inputs.binary-version != inputs.version
         env:
           BINARY_CRATES: ${{ inputs.binary-crates }}
@@ -157,19 +157,30 @@ jobs:
           BIN_VERSION: ${{ inputs.binary-version }}
         run: |
           set -euo pipefail
-          # The previous stamp step stamped every Cargo.toml (including each
-          # bifurcate copy) to the LIBRARY version (pre-release form, e.g.
-          # 0.6.0-dev.{RUN_ID}). For dual-role crates we now re-stamp ONLY the
-          # bifurcate copy at target/bifurcate/<crate>-dev/Cargo.toml to the
-          # BINARY version (regular release, e.g. 0.6.{RUN_ID}). This keeps
-          # the `<name>` library publish on pre-release (sorts below stable)
-          # while the `<name>-dev` binary publish lands as regular release
-          # (resolvable by `cargo binstall <name>-dev` without flags).
-          # Binary-only crates don't need re-stamping — they're rewritten
-          # in-place by rewrite-binary-name.py without --dual-role, so
-          # there's only one Cargo.toml and it's the same crate that gets
-          # published as `<crate>-dev`.
-          echo "Re-stamping bifurcate copies: ${LIB_VERSION} → ${BIN_VERSION}"
+          # The earlier "Stamp Cargo.toml" step rewrote every concrete
+          # `version = "<BASE>"` line to LIB_VERSION (pre-release form, e.g.
+          # 0.6.0-dev.{RUN_ID}). At this point binary crates resolve to
+          # LIB_VERSION via either:
+          #   - dual-role: bifurcate copy at target/bifurcate/<crate>-dev/
+          #     where rewrite-binary-name.py resolved workspace inheritance,
+          #     so the copy's [package].version literally reads LIB_VERSION
+          #   - binary-only: in-place rewrite kept the crate inside the
+          #     workspace, with [package].version still on `version.workspace
+          #     = true` inheriting from [workspace.package].version (now
+          #     stamped to LIB_VERSION). For single-package binary-only repos,
+          #     [package].version was directly stamped to LIB_VERSION.
+          #
+          # We re-stamp both kinds to BIN_VERSION (regular release, e.g.
+          # 0.6.{RUN_ID}). For dual-role we mutate ONLY the staged copy so
+          # the library publish keeps LIB_VERSION. For binary-only we mutate
+          # the in-place Cargo.toml, replacing either `version.workspace =
+          # true` or `version = "<LIB_VERSION>"` with a concrete BIN_VERSION
+          # — overrides the workspace inheritance for that one crate without
+          # affecting sibling library crates that publish under LIB_VERSION.
+          #
+          # Net result: `<name>-dev` publishes as regular release, resolvable
+          # by `cargo binstall <name>-dev` without `--version` flags.
+          echo "Re-stamping binary crates: ${LIB_VERSION} → ${BIN_VERSION}"
           for crate in $BINARY_CRATES; do
             is_dual_role=0
             for dr in $DUAL_ROLE; do
@@ -178,20 +189,61 @@ jobs:
                 break
               fi
             done
-            if [ "$is_dual_role" -ne 1 ]; then
-              continue
+            if [ "$is_dual_role" -eq 1 ]; then
+              copy="target/bifurcate/${crate}-dev/Cargo.toml"
+              if [ ! -f "$copy" ]; then
+                echo "::error::Expected bifurcate copy at ${copy} but it does not exist"
+                exit 1
+              fi
+              if ! grep -q "^version = \"${LIB_VERSION}\"" "$copy"; then
+                echo "::error::Bifurcate copy ${copy} does not contain expected version line 'version = \"${LIB_VERSION}\"' — rewrite-binary-name.py output unexpected"
+                exit 1
+              fi
+              sed -i "s/^version = \"${LIB_VERSION}\"/version = \"${BIN_VERSION}\"/" "$copy"
+              echo "  re-stamped ${copy} (dual-role copy)"
+            else
+              # Locate the in-place-rewritten Cargo.toml by [package].name == <crate>-dev.
+              target=$(python3 -c '
+          import sys, tomllib, pathlib
+          crate = sys.argv[1]
+          target_name = f"{crate}-dev"
+          excluded = {"target", ".git", "node_modules", ".venv"}
+          matches = []
+          for p in pathlib.Path(".").rglob("Cargo.toml"):
+              if any(part in excluded for part in p.parts):
+                  continue
+              try:
+                  with p.open("rb") as fh:
+                      data = tomllib.load(fh)
+              except Exception:
+                  continue
+              if data.get("package", {}).get("name") == target_name:
+                  matches.append(str(p))
+          if len(matches) != 1:
+              print(f"error: expected exactly one Cargo.toml with [package].name == {target_name!r}, found {len(matches)}: {matches}", file=sys.stderr)
+              sys.exit(1)
+          print(matches[0])
+          ' "$crate")
+              if [ -z "$target" ]; then
+                echo "::error::Could not locate in-place-rewritten Cargo.toml for binary-only crate '${crate}'"
+                exit 1
+              fi
+              # Three forms to handle:
+              #   - `version.workspace = true` (sub-crate inheriting; common)
+              #   - `version = { workspace = true }` (inline-table form)
+              #   - `version = "<LIB_VERSION>"` (single-package repo, stamped earlier)
+              if grep -qE "^version\.workspace\s*=\s*true" "$target"; then
+                sed -i -E "s|^version\.workspace\s*=\s*true|version = \"${BIN_VERSION}\"|" "$target"
+              elif grep -qE "^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}" "$target"; then
+                sed -i -E "s|^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}|version = \"${BIN_VERSION}\"|" "$target"
+              elif grep -q "^version = \"${LIB_VERSION}\"" "$target"; then
+                sed -i "s|^version = \"${LIB_VERSION}\"|version = \"${BIN_VERSION}\"|" "$target"
+              else
+                echo "::error::${target}: cannot locate version line to re-stamp (expected 'version.workspace = true', 'version = { workspace = true }', or 'version = \"${LIB_VERSION}\"')"
+                exit 1
+              fi
+              echo "  re-stamped ${target} (binary-only, in-place)"
             fi
-            copy="target/bifurcate/${crate}-dev/Cargo.toml"
-            if [ ! -f "$copy" ]; then
-              echo "::error::Expected bifurcate copy at ${copy} but it does not exist"
-              exit 1
-            fi
-            if ! grep -q "^version = \"${LIB_VERSION}\"" "$copy"; then
-              echo "::error::Bifurcate copy ${copy} does not contain expected version line 'version = \"${LIB_VERSION}\"' — rewrite-binary-name.py output unexpected"
-              exit 1
-            fi
-            sed -i "s/^version = \"${LIB_VERSION}\"/version = \"${BIN_VERSION}\"/" "$copy"
-            echo "  re-stamped ${copy}"
           done
 
       - name: Compute effective publish list
