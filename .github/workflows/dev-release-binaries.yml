@@ -199,7 +199,18 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dev-release-binaries-${{ matrix.target }}
+          # Artifact name MUST include `inputs.package` because callers invoke
+          # this reusable workflow once per binary crate (e.g. greentic-dwbase
+          # calls it 3x for dwbase-cli, dwbase-node, dwbase-pack-runner) within
+          # the same parent workflow run. Without `package` in the name, all
+          # invocations produce artifacts named `dev-release-binaries-<target>`,
+          # which collide on the runner-shared artifact namespace; the
+          # attach-to-release job then downloads only the LAST upload per name
+          # (per `actions/download-artifact@v4` deduplication semantics) and
+          # the other crates' archives for that target are silently dropped —
+          # producing the asymmetric "missing linux assets for dwbase-node /
+          # dwbase-pack-runner" observed in the v0.2.25154159466 release.
+          name: dev-release-binaries-${{ inputs.package }}-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -212,7 +223,13 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: dev-release-binaries-*
+          # Match this caller's package only — the parent workflow run may
+          # contain artifacts from other dev-release-binaries invocations
+          # (one per binary crate), each scoped by `inputs.package`. Without
+          # this scope, the attach job would race with sibling invocations
+          # for the same `dev-release-binaries-<target>` name and drop
+          # archives. See upload-artifact comment above.
+          pattern: dev-release-binaries-${{ inputs.package }}-*
           merge-multiple: true
           path: .dist-staging
 

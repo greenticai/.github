@@ -195,6 +195,15 @@ def rewrite_manifest(manifest: Path, crate: str, new_name: str) -> bool:
             f"text rewrite produced no change (unusual TOML layout?)"
         )
 
+    # Handle the binary-bins override case: a single [[bin]] (or inline bin)
+    # whose name doesn't match [package].name (e.g. crates/dwbase-cli ships
+    # `[[bin]] name = "dwbase"`). The rewrites above only renamed bin entries
+    # whose name == <crate>, leaving these alone — but dev-release-binaries.yml
+    # renames the binary file inside the archive to <crate>-<suffix>, so the
+    # published [[bin]].name must match `<crate>-<suffix>` for cargo-binstall
+    # to find the file.
+    new_text = _rename_single_unmatched_bin(new_text, new_name)
+
     # If the crate auto-discovers a binary from src/bin/<crate>.rs (no matching
     # [[bin]] block), cargo names the installed binary after the file stem, not
     # [package].name. We want ~/.cargo/bin/<crate>-dev, not ~/.cargo/bin/<crate>.
@@ -254,6 +263,127 @@ def _rewrite_inline_bin_array_at_root(text: str, crate: str, new_name: str) -> s
         return prefix + new_body + suffix
 
     return bin_re.sub(_replace, head) + rest
+
+
+def _rename_single_unmatched_bin(text: str, new_name: str) -> str:
+    """Rename a single [[bin]].name that wasn't already rewritten.
+
+    Applies when the manifest contains exactly one bin entry (either ``[[bin]]``
+    array-of-tables or inline ``bin = [{...}]``) whose name differs from
+    ``new_name``. Used to handle the binary-bins override pattern where a crate
+    ships a binary under a different name than [package].name (e.g. dwbase-cli
+    has ``[[bin]] name = "dwbase"``). The earlier ``_rewrite_text`` /
+    ``_rewrite_inline_bin_array_at_root`` only matched names equal to the
+    original crate name, so such ``[[bin]].name`` entries pass through unchanged
+    and break ``cargo binstall <crate>-dev`` because the published
+    ``[[bin]].name`` no longer matches the binary file inside the dev archive
+    (which dev-release-binaries.yml renames to ``<crate>-<suffix>``).
+
+    No-op when:
+      - no bin entries exist (auto-discovery uses [package].name, already
+        renamed; ``_inject_bin_override_if_needed`` may add a [[bin]] block if
+        ``src/bin/<crate>.rs`` exists, in which case the appended block
+        already has the correct name)
+      - the single bin entry already has name == new_name (rewrite handled
+        upstream)
+      - multiple bin entries exist (we can't safely collapse names to one
+        value; multi-bin dev publishes are out of scope and would need
+        per-bin handling)
+
+    Also rewrites a matching [package].default-run pointing at the original
+    bin name, so cargo doesn't error with ``default-run target not found``.
+    """
+    data = tomllib.loads(text)
+    bins = data.get("bin", [])
+    if not isinstance(bins, list) or len(bins) != 1:
+        return text
+    entry = bins[0]
+    if not isinstance(entry, dict):
+        return text
+    current_name = entry.get("name")
+    if not current_name or current_name == new_name:
+        return text
+
+    header_table = re.compile(r"^\[([^\[\]]+)\]\s*(?:#.*)?$")
+    header_aot = re.compile(r"^\[\[([^\[\]]+)\]\]\s*(?:#.*)?$")
+    name_line = re.compile(
+        r'^(?P<prefix>\s*name\s*=\s*)"' + re.escape(current_name) + r'"(?P<suffix>.*)$'
+    )
+    default_run_line = re.compile(
+        r'^(?P<prefix>\s*default-run\s*=\s*)"'
+        + re.escape(current_name)
+        + r'"(?P<suffix>.*)$'
+    )
+
+    lines = text.splitlines(keepends=True)
+    in_aot = False
+    aot_kind = ""
+    table = ""
+    rewrote_bin_name = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = header_aot.match(stripped)
+        if m:
+            in_aot = True
+            aot_kind = m.group(1).strip()
+            continue
+        m = header_table.match(stripped)
+        if m:
+            in_aot = False
+            table = m.group(1).strip()
+            continue
+        body = line.rstrip("\n")
+        has_newline = line.endswith("\n")
+        if in_aot and aot_kind == "bin" and not rewrote_bin_name:
+            m = name_line.match(body)
+            if m:
+                lines[i] = (
+                    m.group("prefix")
+                    + f'"{new_name}"'
+                    + m.group("suffix")
+                    + ("\n" if has_newline else "")
+                )
+                rewrote_bin_name = True
+                continue
+        if (not in_aot) and table == "package":
+            m = default_run_line.match(body)
+            if m:
+                lines[i] = (
+                    m.group("prefix")
+                    + f'"{new_name}"'
+                    + m.group("suffix")
+                    + ("\n" if has_newline else "")
+                )
+
+    new_text = "".join(lines)
+
+    # Inline `bin = [{name = "<orig>", path = ...}]` form: rewrite the name in
+    # the head section before the first table header.
+    if not rewrote_bin_name:
+        header_match = re.search(
+            r"^\s*\[\[?[^\[\]\n]+\]\]?\s*(?:#.*)?$", new_text, re.MULTILINE
+        )
+        head_end = header_match.start() if header_match else len(new_text)
+        head = new_text[:head_end]
+        rest = new_text[head_end:]
+        bin_re = re.compile(r"(^\s*bin\s*=\s*\[)([^\[\]]*?)(\])", re.MULTILINE | re.DOTALL)
+        name_re = re.compile(
+            r'(name\s*=\s*)"' + re.escape(current_name) + r'"'
+        )
+
+        def _replace(match: re.Match) -> str:
+            prefix, body, suffix = match.group(1), match.group(2), match.group(3)
+            new_body, count = name_re.subn(rf'\1"{new_name}"', body, count=1)
+            if count == 0:
+                return match.group(0)
+            return prefix + new_body + suffix
+
+        new_text = bin_re.sub(_replace, head) + rest
+
+    return new_text
 
 
 def _inject_bin_override_if_needed(
