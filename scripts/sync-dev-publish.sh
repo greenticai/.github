@@ -106,14 +106,16 @@ log_drift(){ echo -e "  ${YELLOW}⚠${RESET} $1"; }
 
 # ── Parse REPO_MANIFEST.toml ──────────────────────────────────────
 # Outputs tab-delimited lines:
-#   org \t variant \t tier \t crates \t exclude_crates \t setup_script \t binary_crates \t dual_role_binary_crates \t repo_name
+#   org \t variant \t tier \t crates \t exclude_crates \t setup_script \t binary_crates \t dual_role_binary_crates \t binary_bins \t repo_name
 # Only repos with non-empty publishes. Sorted by tier.
 #
 # Optional fields in the manifest:
-#   exclude-crates           = ["foo", "bar"]    # skipped by build/clippy/test (native linker can't handle WASM cdylibs)
-#   setup-script             = "shell command"   # run before tests. Single-line, no tabs.
-#   binary-crates            = ["gtc"]           # Phase C: subset of publishes that ship a binary (get -dev rename on dev lane)
-#   dual-role-binary-crates  = ["gtc"]           # Phase C: subset of binary-crates that also publish a library under the same name
+#   exclude-crates           = ["foo", "bar"]                 # skipped by build/clippy/test (native linker can't handle WASM cdylibs)
+#   setup-script             = "shell command"                # run before tests. Single-line, no tabs.
+#   binary-crates            = ["gtc"]                        # Phase C: subset of publishes that ship a binary (get -dev rename on dev lane)
+#   dual-role-binary-crates  = ["gtc"]                        # Phase C: subset of binary-crates that also publish a library under the same name
+#   binary-bins              = { "dwbase-cli" = "dwbase" }    # Phase C: per-package [[bin]] name override when bin name != package name.
+#                                                             # Encoded over the wire as comma-separated `pkg=bin` pairs.
 #
 # NOTE: Empty optional fields are emitted as the sentinel `_NONE_`. bash `read`
 # with tab IFS collapses consecutive tab delimiters because tab is whitespace;
@@ -137,12 +139,16 @@ for name, entry in m.get('repos', {}).items():
     setup = entry.get('setup-script', '') or '_NONE_'
     binary = ' '.join(entry.get('binary-crates', [])) or '_NONE_'
     dual   = ' '.join(entry.get('dual-role-binary-crates', [])) or '_NONE_'
+    bins_dict = entry.get('binary-bins', {}) or {}
+    if not isinstance(bins_dict, dict):
+        sys.exit(f'ERROR: binary-bins for {name} must be a TOML inline table')
+    binary_bins = ','.join(f'{k}={v}' for k, v in bins_dict.items()) or '_NONE_'
     if '\t' in setup or '\n' in setup:
         sys.exit(f'ERROR: setup-script for {name} must be a single line with no tabs')
-    entries.append((tier, entry['org'], entry['variant'], crates, exclude, setup, binary, dual, name))
+    entries.append((tier, entry['org'], entry['variant'], crates, exclude, setup, binary, dual, binary_bins, name))
 entries.sort()
-for tier, org, variant, crates, exclude, setup, binary, dual, name in entries:
-    print(f'{org}\t{variant}\t{tier}\t{crates}\t{exclude}\t{setup}\t{binary}\t{dual}\t{name}')
+for tier, org, variant, crates, exclude, setup, binary, dual, binary_bins, name in entries:
+    print(f'{org}\t{variant}\t{tier}\t{crates}\t{exclude}\t{setup}\t{binary}\t{dual}\t{binary_bins}\t{name}')
 "
 }
 
@@ -159,6 +165,24 @@ generate_caller() {
   local setup_script="$4"
   local binary_crates="$5"
   local dual_role_binary_crates="$6"
+  local binary_bins="${7:-}"
+
+  # Look up the [[bin]].name override for a given package, from the
+  # `binary-bins` manifest field encoded as `pkg=bin,pkg2=bin2`. Echoes
+  # the override name when present (and != pkg), nothing otherwise.
+  lookup_bin_override() {
+    local pkg="$1" map="$2" entry k v
+    [[ -z "$map" ]] && return 0
+    IFS=',' read -ra _entries <<<"$map"
+    for entry in "${_entries[@]}"; do
+      k="${entry%%=*}"
+      v="${entry#*=}"
+      if [[ "$k" == "$pkg" && "$v" != "$pkg" ]]; then
+        echo "$v"
+        return 0
+      fi
+    done
+  }
 
   # contents: write is required when binary-crates is non-empty because the
   # paired dev-release-binaries.yml reusable creates a prerelease GitHub Release
@@ -249,6 +273,14 @@ EOF
       package: ${pkg}
       version: \${{ needs.dev-prepare.outputs.binary-version }}
 EOF
+      # Emit `binary:` only when the [[bin]].name diverges from the package
+      # name (per `binary-bins` in REPO_MANIFEST.toml). dev-release-binaries.yml
+      # defaults `binary` to the package name when omitted.
+      local bin_override
+      bin_override=$(lookup_bin_override "$pkg" "$binary_bins")
+      if [[ -n "$bin_override" ]]; then
+        echo "      binary: ${bin_override}"
+      fi
     done
   fi
 
@@ -306,7 +338,8 @@ sync_repo() {
   local setup_script="$6"
   local binary_crates="$7"
   local dual_role_binary_crates="$8"
-  local repo_name="$9"
+  local binary_bins="$9"
+  local repo_name="${10}"
   local local_dir="${ORG_DIRS[$org]}"
   local repo_path="$local_dir/$repo_name"
   local workflow_path=".github/workflows/dev-publish.yml"
@@ -335,7 +368,7 @@ sync_repo() {
 
   # Generate expected caller content
   local expected
-  expected=$(generate_caller "$crates" "$variant" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates")
+  expected=$(generate_caller "$crates" "$variant" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins")
 
   # Get current caller content from develop (if it exists)
   local current
@@ -492,12 +525,13 @@ fi
 current_tier=""
 
 # Parse manifest and process repos (sorted by tier)
-while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script binary_crates dual_role_binary_crates repo_name; do
+while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script binary_crates dual_role_binary_crates binary_bins repo_name; do
   # Strip sentinel back to empty string (see parse_manifest note).
   [[ "$exclude_crates"          == "_NONE_" ]] && exclude_crates=""
   [[ "$setup_script"            == "_NONE_" ]] && setup_script=""
   [[ "$binary_crates"           == "_NONE_" ]] && binary_crates=""
   [[ "$dual_role_binary_crates" == "_NONE_" ]] && dual_role_binary_crates=""
+  [[ "$binary_bins"             == "_NONE_" ]] && binary_bins=""
 
   # Filter to single repo if specified
   if [[ -n "$SINGLE_REPO" && "$repo_name" != "$SINGLE_REPO" ]]; then
@@ -516,7 +550,7 @@ while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script bina
   fi
 
   echo -e "${CYAN}${BOLD}[$org/$repo_name]${RESET} (tier $tier, $variant)"
-  sync_repo "$org" "$variant" "$tier" "$crates" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$repo_name"
+  sync_repo "$org" "$variant" "$tier" "$crates" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$repo_name"
 done < <(parse_manifest)
 
 # ── Summary ───────────────────────────────────────────────────────
