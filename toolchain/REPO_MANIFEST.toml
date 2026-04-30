@@ -34,6 +34,11 @@
 #   dual-role-binary-crates  — Subset of `binary-crates` that ALSO publish a library under
 #                              the same `[package].name`. Library keeps publishing as `<name>`;
 #                              binary gets a sibling `<name>-dev` copy-publish.
+#   binary-bins              — Map of `package -> bin name` overrides for binary-crates whose
+#                              `[[bin]].name` differs from the `[package].name`. Used by
+#                              dev-release-binaries.yml's `--bin` flag. Example:
+#                              `binary-bins = { "dwbase-cli" = "dwbase" }`. Omit when bin
+#                              name == package name (the default).
 #
 # Layout: sections grouped by graph-derived tier, alphabetical within tier.
 # Archived repos are placed at the end regardless of tier.
@@ -314,6 +319,7 @@ publishes = ["dwbase-core", "dwbase-metrics", "dwbase-engine", "dwbase-storage-s
 crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on cli-binaries)
 binary-crates = ["dwbase-cli", "dwbase-node", "dwbase-pack-runner"]
 dual-role-binary-crates = []
+binary-bins = { "dwbase-cli" = "dwbase" }  # crates/dwbase-cli ships [[bin]] name = "dwbase"
 exclude-crates = ["component-dwbase"]
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
