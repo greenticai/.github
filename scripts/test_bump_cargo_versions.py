@@ -468,6 +468,131 @@ def test_dev_publish_stamping_coincidence_preserves_pre_release(root: Path) -> N
     )
 
 
+def test_pre_release_preserves_binary_crate_name(root: Path) -> None:
+    """Regression (Phase C.6 of plans/binary-bifurcation.md): bumping a binary
+    crate with --pre-release must NEVER touch [package].name or [[bin]].name.
+
+    Why this is load-bearing: binary-bifurcation (gtc → gtc-dev on the dev
+    lane) is performed at *publish time* by rewrite-binary-name.py, not by
+    this script. The committed Cargo.toml on develop must keep [package].name
+    = "gtc" so:
+      - forward-port.sh from develop → main keeps the name stable
+      - rewrite-binary-name.py's idempotency check (matches both <crate> and
+        <crate>-dev) holds
+      - dual-role library publishes still resolve under the canonical name
+
+    A future refactor that taught the bumper to "rename for dev" would silently
+    corrupt every binary-bifurcated repo's Cargo.toml. This test pins the
+    invariant.
+    """
+    _write(
+        root,
+        "Cargo.toml",
+        '[package]\n'
+        'name = "gtc"\n'
+        'version = "0.5.3"\n'
+        'default-run = "gtc"\n\n'
+        '[[bin]]\n'
+        'name = "gtc"\n'
+        'path = "src/main.rs"\n\n'
+        '[[bin]]\n'
+        'name = "perf"\n'
+        'path = "src/bin/perf.rs"\n\n'
+        '[dependencies]\n'
+        'greentic-types = "0.5"\n',
+    )
+    _run_with(root, "--from", "0.5", "--to", "0.6", "--pre-release")
+
+    data = _load(root, "Cargo.toml")
+    # Sanity: version did get bumped (proves the bumper actually ran).
+    _assert(
+        data["package"]["version"] == "0.6.0-dev.0",
+        f"package version should bump to 0.6.0-dev.0, got {data['package']['version']!r}",
+    )
+    # The invariant under test:
+    _assert(
+        data["package"]["name"] == "gtc",
+        f"[package].name must NOT be touched by bumper, got {data['package']['name']!r}",
+    )
+    _assert(
+        data["package"].get("default-run") == "gtc",
+        f"[package].default-run must NOT be touched, got {data['package'].get('default-run')!r}",
+    )
+    bin_names = sorted(b["name"] for b in data.get("bin", []))
+    _assert(
+        bin_names == ["gtc", "perf"],
+        f"[[bin]].name entries must NOT be touched by bumper, got {bin_names!r}",
+    )
+
+    # Also verify via raw text — TOML round-trip could in theory normalize a
+    # value while keeping the parsed dict equal, so check the literal is intact.
+    text = (root / "Cargo.toml").read_text()
+    _assert(
+        'name = "gtc"' in text,
+        f"raw [package].name literal missing from emitted file:\n{text}",
+    )
+
+
+def test_pre_release_preserves_workspace_member_binary_name(root: Path) -> None:
+    """Same invariant as above but for sub-crate binaries: a workspace member
+    whose [package].name is `dwbase-cli` (binary-only crate in
+    greentic-dwbase) must keep that literal name even when its own
+    [package].version line is on `version.workspace = true`. The bumper only
+    touches version values; name passes through untouched on every code path.
+    """
+    _write(
+        root,
+        "Cargo.toml",
+        '[workspace]\n'
+        'members = ["crates/dwbase-cli"]\n\n'
+        '[workspace.package]\n'
+        'version = "0.2.0-dev.0"\n'
+        'edition = "2024"\n',
+    )
+    _write(
+        root,
+        "crates/dwbase-cli/Cargo.toml",
+        '[package]\n'
+        'name = "dwbase-cli"\n'
+        'version.workspace = true\n'
+        'edition.workspace = true\n\n'
+        '[[bin]]\n'
+        'name = "dwbase"\n'
+        'path = "src/main.rs"\n',
+    )
+    _run_with(root, "--from", "0.2", "--to", "0.3", "--pre-release")
+
+    # workspace.package.version did bump
+    ws = _load(root, "Cargo.toml")
+    _assert(
+        ws["workspace"]["package"]["version"] == "0.3.0-dev.0",
+        f"workspace.package.version should bump, got {ws['workspace']['package']['version']!r}",
+    )
+
+    # Sub-crate untouched modulo the dotted-key round-trip.
+    member = _load(root, "crates/dwbase-cli/Cargo.toml")
+    _assert(
+        member["package"]["name"] == "dwbase-cli",
+        f"sub-crate [package].name must NOT change, got {member['package']['name']!r}",
+    )
+    bin_names = sorted(b["name"] for b in member.get("bin", []))
+    _assert(
+        bin_names == ["dwbase"],
+        f"[[bin]].name entries must NOT be touched, got {bin_names!r}",
+    )
+
+    # Workspace inheritance preserved as dotted-key (Cargo rejects sub-table form).
+    text = (root / "crates/dwbase-cli/Cargo.toml").read_text()
+    _assert(
+        "version.workspace = true" in text,
+        f"version.workspace = true must round-trip as dotted key:\n{text}",
+    )
+    _assert(
+        'name = "dwbase-cli"' in text,
+        f"raw [package].name literal missing:\n{text}",
+    )
+
+
 def test_stable_cut_from_pre_release_strips_suffix(root: Path) -> None:
     """Weekly-stable-prepare flow: package on 0.6.0-dev.7, no --pre-release,
     should cut to 0.6.0 stable."""
@@ -510,6 +635,8 @@ def main() -> int:
         test_pre_release_rejects_malformed_to_version,
         test_non_pre_release_rejects_pre_release_to_version,
         test_dev_publish_stamping_coincidence_preserves_pre_release,
+        test_pre_release_preserves_binary_crate_name,
+        test_pre_release_preserves_workspace_member_binary_name,
         test_stable_cut_from_pre_release_strips_suffix,
     ]
     failed = 0
