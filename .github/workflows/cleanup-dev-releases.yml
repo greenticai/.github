@@ -1,0 +1,76 @@
+name: Cleanup Dev Releases
+
+# Weekly purge of dev-lane GitHub Releases. dev-release-binaries.yml creates
+# a prerelease GH Release per nightly run, tagged `v<binary-version>` with
+# title `<tag> (dev build)`. Without periodic cleanup, ~16 binary repos ×
+# nightly = ~5800 dev tags/year per repo otherwise (Phase C.4 outstanding
+# item, see plans/binary-bifurcation.md).
+#
+# Centralized like train-stall-monitor.yml: one workflow in greenticai/.github
+# mints an org-wide GitHub App token and iterates over binary-bifurcated
+# repos in REPO_MANIFEST.toml. No per-repo caller fanout needed.
+#
+# Safety: per repo, the latest KEEP_LATEST releases are preserved regardless
+# of age — guards `cargo binstall <name>-dev` against repos where no recent
+# nightly has run (the binstall metadata in the live crates.io max_version
+# points at one of these archives).
+
+on:
+  schedule:
+    - cron: '30 7 * * 1'  # Monday 07:30 UTC — after train-stall-monitor (07:15)
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Log deletions without removing anything'
+        required: false
+        type: boolean
+        default: false
+      retention-days:
+        description: 'Delete dev releases older than this many days'
+        required: false
+        type: string
+        default: '30'
+      keep-latest:
+        description: 'Always keep this many most-recent dev releases per repo'
+        required: false
+        type: string
+        default: '3'
+      single-repo:
+        description: 'Process only this repo (empty = all binary-bifurcated)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  cleanup:
+    name: Purge old dev releases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Mint GitHub App token (org-wide)
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Run cleanup
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DRY_RUN: ${{ inputs.dry-run || 'false' }}
+          RETENTION_DAYS: ${{ inputs.retention-days || '30' }}
+          KEEP_LATEST: ${{ inputs.keep-latest || '3' }}
+          SINGLE_REPO: ${{ inputs.single-repo || '' }}
+        run: bash scripts/cleanup-dev-releases.sh
