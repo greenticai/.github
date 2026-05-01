@@ -1,0 +1,92 @@
+name: Assert Branch Invariants
+
+# Reusable workflow that asserts dev-stable branch invariants on push/PR.
+#
+# Why this exists (Phase D of plans/binary-bifurcation.md):
+#   pr-ci.yml's main-pre-release-guard catches `0.x.y-dev.NN` versions at PR
+#   time, but only via the PR-level event. Direct pushes to `main` (possible
+#   on private repos under the GitHub free plan, where ruleset enforcement is
+#   not available — see project_branch_protection_limitation memory) bypass it.
+#   This workflow runs on `push: [main]` AND `pull_request: [main]` so the
+#   guard fires on both paths. It also adds a develop-lane WARN check that
+#   today nothing covers.
+#
+# Lane behavior:
+#   main:    FAIL on `*-dev.*` version OR `<base>-dev` package name
+#   develop: WARN if a manifest-declared binary basename is missing from the
+#            tree, or if `<base>-dev` was committed (rewrite is publish-time
+#            only — see scripts/rewrite-binary-name.py).
+#
+# Caller pattern (per repo, in .github/workflows/branch-invariants.yml):
+#
+#   on:
+#     push:
+#       branches: [main, develop]
+#     pull_request:
+#       branches: [main, develop]
+#
+#   jobs:
+#     assert:
+#       uses: greenticai/.github/.github/workflows/assert-branch-invariants.yml@main
+#       with:
+#         lane: ${{ github.base_ref || github.ref_name }}
+#
+# (Caller fanout to all binary-bifurcated repos is a follow-up — see plan
+# section "Phase D deployment" — done via scripts/sync-* once this lands.)
+
+on:
+  workflow_call:
+    inputs:
+      lane:
+        description: "Branch lane to assert against — 'main' (fail on dev leakage) or 'develop' (warn on rewrite leakage). Pass `${{ github.base_ref || github.ref_name }}`."
+        required: true
+        type: string
+      meta-ref:
+        description: "Ref of greenticai/.github to read REPO_MANIFEST.toml + script from. Default: main."
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  assert:
+    name: "Assert ${{ inputs.lane }}-lane invariants"
+    runs-on: ubuntu-latest
+    # The caller passes `lane` from `github.base_ref || github.ref_name`.
+    # On a PR targeting `feature/*` we don't want to run any check — only
+    # main + develop have invariants to enforce. Skip everything else.
+    if: ${{ inputs.lane == 'main' || inputs.lane == 'develop' }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v6
+        with:
+          path: _caller
+          fetch-depth: 1
+
+      - name: Checkout greenticai/.github (manifest + script)
+        uses: actions/checkout@v6
+        with:
+          repository: greenticai/.github
+          path: _meta
+          ref: ${{ inputs.meta-ref }}
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run invariant check
+        env:
+          LANE: ${{ inputs.lane }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          python3 _meta/scripts/assert-branch-invariants.py \
+            --lane "$LANE" \
+            --repo-name "$REPO_NAME" \
+            --root _caller \
+            --manifest _meta/toolchain/REPO_MANIFEST.toml
