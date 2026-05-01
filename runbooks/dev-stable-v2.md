@@ -250,6 +250,43 @@ resolves it.
 This was the root cause of the 6 yanked versions on 2026-04-27 (fixed
 by PR #128) and the binary-only scheme bug fixed by PR #141 (2026-04-30).
 
+### `Branch Invariants` workflow fails with "workflow file issue" (startup_failure)
+
+Symptom: every PR or push to a repo where `branch-invariants.yml`
+is wired produces a 0-second failure with no logs and no annotations,
+just the message "This run likely failed because of a workflow file
+issue." The check suite has `latest_check_runs_count: 0`.
+
+The most likely cause: someone added an expression like
+`${{ github.X }}` to a `description:` field in
+`assert-branch-invariants.yml`'s `workflow_call` inputs.
+
+**Why this fails.** GitHub Actions evaluates `${{ ... }}` expressions
+*even inside metadata strings* at workflow_call parse time, before the
+runtime `github` context is bound. References to `github.X` (and most
+other contexts) are unresolvable at parse time, so the graph builder
+rejects the workflow file with the unhelpful generic message.
+
+**Rule:**
+
+| Expression | Where | Safe? |
+|---|---|---|
+| `${{ inputs.X }}` | anywhere | ✅ bound at parse time |
+| `${{ github.X }}` | `description:`, other metadata strings | ❌ unresolvable at parse time |
+| `${{ github.X }}` | `if:`, `with:`, step `env:`, `run:` | ✅ runtime context |
+| `${{ github.X }}` | YAML comments (`# ...`) | ✅ comments are stripped |
+
+Fix: replace the literal `${{ github.X }}` with prose. If you need to
+illustrate the caller pattern, do it in a top-of-file comment block
+(comments are stripped, not evaluated).
+
+History: this bit us during Phase D smoke (PR #146 merged with the bug;
+fixed in PR #149 on 2026-05-01). The `lane` input description in
+`assert-branch-invariants.yml` had `Pass \`${{ github.base_ref ||
+github.ref_name }}\`` as illustrative text, which broke every caller in
+the fleet rollout. The current file has an inline comment in the
+`lane:` definition warning against this.
+
 ### `cleanup-dev-releases.yml` deleted a GitHub Release that binstall still needs
 
 Two possibilities:
@@ -282,11 +319,12 @@ the symptom, double-check the cleanup didn't run with a wrong
 | `scripts/audit-binary-crates.sh` | Cross-checks manifest vs each repo's actual `[[bin]]` declarations. |
 | `scripts/cleanup-dev-releases.sh` | Weekly purge of dev GH Releases > 30d with `KEEP_LATEST=3` floor. |
 | `scripts/assert-branch-invariants.py` | Push-time guardrail: main FAIL on `-dev.*` version or `<crate>-dev` name; develop WARN on alias leak. |
+| `scripts/sync-branch-invariants.sh` | Generates the per-repo `branch-invariants.yml` caller from the manifest. Re-run on a single repo with `--repo NAME` or fleet-wide for a re-deploy. Idempotent. |
 | `.github/workflows/dev-prepare.yml` | Stamps versions; outputs `version` (lib) + `binary-version` (binary alias). |
 | `.github/workflows/dev-release-binaries.yml` | Builds binaries for the 6-target matrix; uploads to a per-run prerelease GH Release. |
 | `.github/workflows/dev-publish.yml` | Bifurcates (rewrite + re-stamp) and publishes to crates.io. |
 | `.github/workflows/cleanup-dev-releases.yml` | Centralized weekly cron, Mon 07:30 UTC, mints app token, deletes old dev releases. |
-| `.github/workflows/assert-branch-invariants.yml` | Reusable workflow_call fired by per-repo callers on push/PR to main/develop. |
+| `.github/workflows/assert-branch-invariants.yml` | Reusable workflow_call fired by per-repo callers on push/PR to main/develop. Deployed fleet-wide as `branch-invariants.yml` in each repo's `.github/workflows/` (Phase D fanout, 2026-05-01). |
 
 ---
 
@@ -299,8 +337,9 @@ the symptom, double-check the cleanup didn't run with a wrong
 
 ## Related plans
 
-- `plans/binary-bifurcation.md` — the design history. Phase C complete
-  2026-05-01; Phase D reusable workflow in PR #146; Phases E (this
-  runbook) + F (1.0/1.1 cutover) ongoing.
+- `plans/binary-bifurcation.md` — the design history. Phases A–E +
+  Phase D fleet fanout complete 2026-05-01 (PRs #144–#149 in
+  `greenticai/.github`, plus 68 fleet caller PRs). Phase F (1.0/1.1
+  cutover) gated on ≥2 nightly + 1 weekly clean cycle.
 - `plans/pre-release-minor-bump-lane.md` — the library half of the
   bifurcation, completed 2026-04-22.
