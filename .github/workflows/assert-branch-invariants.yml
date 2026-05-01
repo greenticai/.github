@@ -38,7 +38,14 @@ on:
   workflow_call:
     inputs:
       lane:
-        description: "Branch lane to assert against — 'main' (fail on dev leakage) or 'develop' (warn on rewrite leakage). Pass `${{ github.base_ref || github.ref_name }}`."
+        # NOTE: do NOT use `${{ ... }}` expression syntax in this description.
+        # GitHub Actions evaluates such expressions even in metadata strings at
+        # workflow_call parse time, before the runtime context exists, which
+        # produces a graph-build startup_failure with the unhelpful generic
+        # "workflow file issue" message. References to `github.X` in particular
+        # are unresolvable at parse time. Reference the caller pattern via the
+        # comment block above instead.
+        description: "Branch lane to assert against. Pass either 'main' (fail on dev leakage) or 'develop' (warn on rewrite leakage). Caller derives this from github.base_ref || github.ref_name."
         required: true
         type: string
       meta-ref:
