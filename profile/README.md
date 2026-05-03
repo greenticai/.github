@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED from greenticai/greentic@9af1e44 — do not edit directly -->
+<!-- AUTO-GENERATED from greenticai/greentic@bcc0420 — do not edit directly -->
 
 # Greentic — The Digital Workers OS
 
@@ -388,8 +388,22 @@ gtc install
 ## Install modes
 
 ```bash
-# Public tools only
+# Latest stable toolchain, companion binaries, stable packs, and stable components
 gtc install
+
+# Specific release and channel
+gtc install --release 1.0.16 --channel stable
+```
+
+Supported install channels are `stable`, `dev`, and `rnd` (`rnd` means research
+and development). For production-ready pack and component references, use the
+stable OCI tag, for example `oci://ghcr.io/...:stable`, rather than
+`oci://ghcr.io/...:latest`.
+
+`gtc wizard` and `gtc setup` warn when the installed release context is not the
+latest release for the launcher's channel (`gtc` -> `stable`, `gtc-dev` ->
+`dev`, `gtc-rnd` -> `rnd`). Use `--strict-release-context` to fail on a mismatch,
+or `--ignore-release-context` to skip the check.
 
 ---
 
