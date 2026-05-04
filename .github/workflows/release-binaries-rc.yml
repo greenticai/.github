@@ -1,0 +1,232 @@
+name: Release Binaries (RC)
+
+# Reusable workflow that builds RC (release-candidate) binaries for the same
+# 6 targets as release-binaries.yml, packages them as archives with sha256
+# checksums, and attaches them to a GitHub *pre-release* tagged
+# v{X.Y.Z}-rc.{run_id}. Called by per-repo wrapper workflows
+# (rc-build.yml) which are themselves dispatched by the
+# stable-rc-build.yml orchestrator against a release/v{X.Y.Z} branch.
+#
+# Differences vs release-binaries.yml:
+#   - Builds from an arbitrary `ref` (release branch), not a tag-triggered ref
+#   - Caller passes the RC `tag` to create (release-binaries.yml derives the
+#     tag from GITHUB_REF_NAME and refuses non-tag refs)
+#   - Always creates the GitHub release with --prerelease
+#   - No SBOM, provenance, GHCR push, or release notes — RCs are throwaway
+#     artifacts only used to gate promotion to crates.io
+#
+# Cleanup of stale RC pre-releases is handled by cleanup-rc-releases.yml
+# (mirrors cleanup-dev-releases.yml).
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: "Cargo package name to build (passed to cargo build -p)"
+        required: true
+        type: string
+      binary:
+        description: "Binary name (the executable file name, without .exe suffix)"
+        required: true
+        type: string
+      ref:
+        description: "Git ref to build from (e.g. release/v0.4.59)"
+        required: true
+        type: string
+      tag:
+        description: "RC tag to create on the GitHub pre-release (e.g. v0.4.59-rc.{run_id})"
+        required: true
+        type: string
+      rust-version:
+        description: "Rust toolchain version"
+        required: false
+        type: string
+        default: "1.95.0"
+      extra-files:
+        description: "Newline-separated list of repo-root files to include alongside the binary in the archive (e.g. README.md, LICENSE)"
+        required: false
+        type: string
+        default: ""
+      windows-archive-format:
+        description: "Archive format for Windows targets: 'tgz' or 'zip'"
+        required: false
+        type: string
+        default: "tgz"
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            os: linux
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            os: linux
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            os: macos
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            os: macos
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            os: windows
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            os: windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-binaries-rc-${{ matrix.target }}
+
+      - name: Derive version from input tag
+        id: version
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG}"
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            --package "${{ inputs.package }}" \
+            --bin "${{ inputs.binary }}"
+
+      - name: Package archive (tgz)
+        if: matrix.os != 'windows' || inputs.windows-archive-format == 'tgz'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BINARY: ${{ inputs.binary }}
+          EXTRA_FILES: ${{ inputs.extra-files }}
+          OS: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          bin_suffix=""
+          if [[ "${OS}" == "windows" ]]; then
+            bin_suffix=".exe"
+          fi
+          stem="${BINARY}-v${VERSION}-${TARGET}"
+          mkdir -p "dist/${stem}"
+          cp "target/${TARGET}/release/${BINARY}${bin_suffix}" "dist/${stem}/${BINARY}${bin_suffix}"
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [ -f "$f" ]; then
+              cp "$f" "dist/${stem}/"
+            else
+              echo "::warning::extra-file not found: $f"
+            fi
+          done <<< "${EXTRA_FILES}"
+          tar -C dist -czf "dist/${stem}.tgz" "${stem}"
+          rm -rf "dist/${stem}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${stem}.tgz" > "${stem}.tgz.sha256")
+          else
+            (cd dist && shasum -a 256 "${stem}.tgz" > "${stem}.tgz.sha256")
+          fi
+
+      - name: Package archive (zip)
+        if: matrix.os == 'windows' && inputs.windows-archive-format == 'zip'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BINARY: ${{ inputs.binary }}
+          EXTRA_FILES: ${{ inputs.extra-files }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stem = "$env:BINARY-v$env:VERSION-$env:TARGET"
+          New-Item -ItemType Directory -Force -Path "dist/$stem" | Out-Null
+          Copy-Item "target/$env:TARGET/release/$env:BINARY.exe" "dist/$stem/$env:BINARY.exe"
+          if ($env:EXTRA_FILES) {
+            foreach ($f in $env:EXTRA_FILES -split "`n") {
+              $f = $f.Trim()
+              if ($f -and (Test-Path $f)) {
+                Copy-Item $f "dist/$stem/"
+              } elseif ($f) {
+                Write-Host "::warning::extra-file not found: $f"
+              }
+            }
+          }
+          Compress-Archive -Path "dist/$stem/*" -DestinationPath "dist/$stem.zip" -Force
+          Remove-Item -Recurse -Force "dist/$stem"
+          $hash = (Get-FileHash "dist/$stem.zip" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "dist/$stem.zip.sha256" -Value "$hash  $stem.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries-rc-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  attach-to-prerelease:
+    name: Attach binaries to RC pre-release
+    runs-on: ubuntu-latest
+    needs: build-binaries
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-binaries-rc-*
+          merge-multiple: true
+          path: .dist-staging
+
+      - name: Ensure RC pre-release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Pre-release ${TAG} already exists, will upload archives with --clobber"
+          else
+            gh release create "${TAG}" \
+              --title "${TAG}" \
+              --target "${REF}" \
+              --prerelease \
+              --notes "Release-candidate build for the stable-e2e-gate. Not for general consumption."
+          fi
+
+      - name: Upload archives to RC pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(.dist-staging/*.tgz .dist-staging/*.zip .dist-staging/*.sha256)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::No archives found in .dist-staging/"
+            exit 1
+          fi
+          gh release upload "${TAG}" "${files[@]}" --clobber
