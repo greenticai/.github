@@ -1,0 +1,82 @@
+name: Stable RC Build
+
+# Discovers open release PRs in V1 binary-shipping repos (greentic,
+# greentic-runner, greentic-deployer, greentic-bundle), dispatches each
+# repo's rc-build.yml against its release branch, polls until all complete,
+# and emits rc-manifest.json describing the produced RC pre-releases.
+#
+# Consumed by the (forthcoming) stable-e2e-gate.yml orchestrator, which
+# reads the manifest and dispatches the E2E batch against the RC binaries.
+#
+# V1: workflow_dispatch only. Cron will be added in V2 once the gate is
+# proven reliable (avoids Slack noise during stabilization).
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'Comma-separated repo names to build (default: all V1 repos: greentic,greentic-runner,greentic-deployer,greentic-bundle)'
+        required: false
+        type: string
+        default: ''
+      dry-run:
+        description: 'Discover release PRs but skip dispatch'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: Discover, dispatch, poll
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      summary: ${{ steps.run.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Mint GitHub App token (org-wide)
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Run stable-rc-build.sh
+        id: run
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          INPUT_REPOS: ${{ inputs.repos }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: bash scripts/stable-rc-build.sh
+
+      - name: Upload RC manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc-manifest
+          path: rc-manifest.json
+          if-no-files-found: error
+
+  notify-failure:
+    needs: [build]
+    if: failure()
+    uses: ./.github/workflows/notify-failure.yml
+    with:
+      workflow-name: stable-rc-build
+      step: orchestrate
+      error: "Stable RC build failed — check the run log"
+      details: ${{ needs.build.outputs.summary }}
+    secrets:
+      SLACK_WEBHOOK_RELEASE_ALERTS: ${{ secrets.SLACK_WEBHOOK_RELEASE_ALERTS }}
