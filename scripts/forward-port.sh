@@ -10,10 +10,12 @@
 # current with stable patches. Also available via workflow_dispatch.
 #
 # Environment:
-#   GH_TOKEN      — GitHub PAT with repo scope across the orgs
-#   INPUT_REPO    — (optional) Process a single repo by name
-#   INPUT_TIER    — (optional) Process a specific tier only
-#   INPUT_DRY_RUN — (optional) "true" to preview without pushing/PRs
+#   GH_TOKEN_GREENTICAI    — App token scoped to greenticai org installation
+#   GH_TOKEN_GREENTIC_BIZ  — App token scoped to greentic-biz org installation
+#   GH_TOKEN               — Fallback when per-org tokens aren't set (e.g. local runs)
+#   INPUT_REPO             — (optional) Process a single repo by name
+#   INPUT_TIER             — (optional) Process a specific tier only
+#   INPUT_DRY_RUN          — (optional) "true" to preview without pushing/PRs
 
 set -euo pipefail
 
@@ -23,6 +25,18 @@ FORWARD_PORT_LABEL="forward-port"
 DRY_RUN="${INPUT_DRY_RUN:-false}"
 REPO_FILTER="${INPUT_REPO:-}"
 TIER_FILTER="${INPUT_TIER:-}"
+
+# Per-org tokens, with single-token fallback for local invocation.
+GH_TOKEN_GREENTICAI="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN_GREENTIC_BIZ:-${GH_TOKEN:-}}"
+
+token_for_org() {
+  case "$1" in
+    greenticai)   echo "$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) echo "$GH_TOKEN_GREENTIC_BIZ" ;;
+    *)            echo "::error::Unknown org '$1' — no token available" >&2; return 1 ;;
+  esac
+}
 
 # Counters
 merged_clean=0
@@ -57,6 +71,16 @@ for tier, org, name in entries:
 "
 }
 
+# ── Check repo is reachable with current token ──────────────────
+# Catches token-scope bugs where the wrong org's token would 404 on every
+# repo of the other org and the script would silently classify them all as
+# "no develop branch". With reachability proven first, has_develop's miss
+# below is unambiguously a missing branch.
+repo_reachable() {
+  local repo="$1"
+  gh api "repos/$repo" --silent 2>/dev/null
+}
+
 # ── Check if develop branch exists ───────────────────────────────
 has_develop() {
   local repo="$1"
@@ -85,8 +109,28 @@ ensure_label() {
 forward_port_repo() {
   local repo="$1"    # org/name
   local name="$2"    # short name
+  local org="$3"     # org alone
 
-  # 1. Check develop exists
+  # Select the per-org App token. Both `gh api` and the clone URL below pick
+  # this up via $GH_TOKEN, so set it for the duration of this function call.
+  local GH_TOKEN
+  GH_TOKEN="$(token_for_org "$org")" || { ((failed++)) || true; return 1; }
+  export GH_TOKEN
+  if [[ -z "$GH_TOKEN" ]]; then
+    err "$name — no token available for org '$org'"
+    ((failed++)) || true
+    return 1
+  fi
+
+  # 1a. Reachability — fail loud on auth/scope errors so we never silently
+  # mis-skip a whole org's repos as "no develop branch" again.
+  if ! repo_reachable "$repo"; then
+    err "$name — repo unreachable (token scope or App not installed in '$org'?)"
+    ((failed++)) || true
+    return 1
+  fi
+
+  # 1b. Check develop exists
   if ! has_develop "$repo"; then
     log "  ⊘ $name — no develop branch"
     ((skipped_no_develop++)) || true
@@ -265,7 +309,7 @@ while IFS=$'\t' read -r tier org name; do
   fi
 
   full="$org/$name"
-  forward_port_repo "$full" "$name"
+  forward_port_repo "$full" "$name" "$org"
 
 done < <(get_repos)
 
