@@ -82,6 +82,15 @@ version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = false
 weekly-stable-enabled = false
 
+[repos.greentic-designer-admin]
+org = "greentic-biz"
+variant = "host"
+tier = 0
+publishes = []  # service binary with embedded React SPA — not a crates.io crate
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
+
 [repos.greentic-designer-extensions]
 org = "greentic-biz"
 variant = "wasm"
@@ -133,6 +142,15 @@ publishes = ["greentic-telemetry"]
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
+
+[repos.greentic-tenant-manager]
+org = "greentic-biz"
+variant = "host"
+tier = 0
+publishes = []  # commercial workspace, no crates.io publish
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
 
 [repos.greentic-test-types]
 org = "greenticai"
@@ -672,15 +690,6 @@ org = "greenticai"
 variant = "host"
 tier = 8
 publishes = []  # test suites, not published
-version-track = { from = "0.4", to = "0.5" }
-dev-publish-enabled = true
-weekly-stable-enabled = true
-
-[repos.greentic-flow-builder]
-org = "greentic-biz"
-variant = "host"
-tier = 8
-publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
