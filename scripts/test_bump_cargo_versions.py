@@ -593,6 +593,63 @@ def test_pre_release_preserves_workspace_member_binary_name(root: Path) -> None:
     )
 
 
+def test_pre_release_loose_lower_bound_is_bumped(root: Path) -> None:
+    """Loose-range form `>=N.M, <X.Y.Z-0` (no `.0` after the minor) must
+    still match `--from N.M`.
+
+    Encountered in the wild on greentic-pack/develop where 12+ workspace
+    deps were authored as `">=0.5, <0.7.0-0"` to span two minors. The
+    original regex `>=N.M[\\.\\d]` required a `.` or digit immediately
+    after the minor, silently skipping these.
+    """
+    _write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = []\n\n"
+        "[workspace.dependencies]\n"
+        "greentic-types = \">=0.5, <0.7.0-0\"\n"
+        "greentic-flow = { version = \">=0.5, <0.7.0-0\" }\n"
+        "greentic-config = \">=0.5\"\n",
+    )
+    _run_with(root, "--from", "0.5", "--to", "1.1", "--pre-release")
+
+    deps = _load(root, "Cargo.toml")["workspace"]["dependencies"]
+    _assert(
+        deps["greentic-types"] == ">=1.1.0-dev, <1.2.0-0",
+        f"loose bare-string range not bumped: {deps['greentic-types']!r}",
+    )
+    _assert(
+        deps["greentic-flow"]["version"] == ">=1.1.0-dev, <1.2.0-0",
+        f"loose table-form range not bumped: {deps['greentic-flow']!r}",
+    )
+    _assert(
+        deps["greentic-config"] == ">=1.1.0-dev, <1.2.0-0",
+        f"loose no-upper-bound range not bumped: {deps['greentic-config']!r}",
+    )
+
+
+def test_pre_release_loose_range_does_not_match_unrelated_minor(root: Path) -> None:
+    """The loose-range matcher must NOT match `>=0.50` when --from is `0.5`.
+
+    Negative-lookahead `(?!\\d)` blocks the digit boundary, so `0.5` and
+    `0.50` stay distinct minors.
+    """
+    _write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = []\n\n"
+        "[workspace.dependencies]\n"
+        "greentic-zzz = \">=0.50, <0.51\"\n",
+    )
+    _run_with(root, "--from", "0.5", "--to", "0.6", "--pre-release")
+
+    deps = _load(root, "Cargo.toml")["workspace"]["dependencies"]
+    _assert(
+        deps["greentic-zzz"] == ">=0.50, <0.51",
+        f"unrelated-minor range was incorrectly bumped: {deps['greentic-zzz']!r}",
+    )
+
+
 def test_stable_cut_from_pre_release_strips_suffix(root: Path) -> None:
     """Weekly-stable-prepare flow: package on 0.6.0-dev.7, no --pre-release,
     should cut to 0.6.0 stable."""
@@ -637,6 +694,8 @@ def main() -> int:
         test_dev_publish_stamping_coincidence_preserves_pre_release,
         test_pre_release_preserves_binary_crate_name,
         test_pre_release_preserves_workspace_member_binary_name,
+        test_pre_release_loose_lower_bound_is_bumped,
+        test_pre_release_loose_range_does_not_match_unrelated_minor,
         test_stable_cut_from_pre_release_strips_suffix,
     ]
     failed = 0
