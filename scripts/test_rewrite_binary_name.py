@@ -889,6 +889,120 @@ path = "src/main.rs"
     print("OK  test_dual_role_inherit_missing_key_errors")
 
 
+def test_dual_role_resolves_workspace_lints_inherit() -> None:
+    """Dual-role copy must inline [workspace.lints.*] over `[lints].workspace = true`.
+
+    Regression: greentic-x's gx crate uses `[lints]\\nworkspace = true` to
+    inherit `[workspace.lints.rust]` + `[workspace.lints.clippy]`. Before
+    this fix, the bifurcate copy kept the inheritance marker but wrote an
+    empty [workspace] block, so cargo errored with `error inheriting lints
+    from workspace root manifest's workspace.lints / workspace.lints was
+    not defined` during the dev-publish dry-run.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.4.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+""",
+        )
+        _write(root, "crates/mycrate/src/main.rs", "fn main() {}\n")
+
+        _run(root, "mycrate", "--dual-role")
+
+        copy = _load(
+            root / "target" / "bifurcate" / "mycrate-dev" / "Cargo.toml"
+        )
+        lints = copy.get("lints") or {}
+        _assert(
+            "rust" in lints and "clippy" in lints,
+            f"[lints] not resolved into workspace tree: {lints!r}",
+        )
+        rust = lints.get("rust") or {}
+        clippy = lints.get("clippy") or {}
+        _assert(
+            rust.get("unsafe_code") == "forbid",
+            f"[lints.rust] entries lost: {rust!r}",
+        )
+        _assert(
+            clippy.get("unwrap_used") == "warn",
+            f"[lints.clippy] entries lost: {clippy!r}",
+        )
+        _assert(
+            lints != {"workspace": True},
+            "inheritance marker survived in the copy — cargo would still error",
+        )
+    print("OK  test_dual_role_resolves_workspace_lints_inherit")
+
+
+def test_dual_role_lints_inherit_missing_workspace_lints_errors() -> None:
+    """Member with `[lints].workspace = true` but no parent [workspace.lints] errors clearly."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.4.2"
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+""",
+        )
+
+        proc = _run(root, "mycrate", "--dual-role", expect_fail=True)
+        _assert(
+            "lints" in proc.stderr and "not defined" in proc.stderr,
+            f"expected clear error about missing [workspace.lints], got: {proc.stderr!r}",
+        )
+    print("OK  test_dual_role_lints_inherit_missing_workspace_lints_errors")
+
+
 def test_binstall_metadata_injected_when_absent() -> None:
     """Crate without [package.metadata.binstall] gets a default block pointing
     at the dev-release-binaries.yml archive layout."""
@@ -1451,6 +1565,8 @@ def main() -> int:
     test_dual_role_workspace_root_excludes_sibling_members()
     test_dual_role_fixup_escaping_readme()
     test_dual_role_inherit_missing_key_errors()
+    test_dual_role_resolves_workspace_lints_inherit()
+    test_dual_role_lints_inherit_missing_workspace_lints_errors()
     test_binstall_metadata_injected_when_absent()
     test_binstall_injection_idempotent()
     test_binstall_existing_not_overwritten()

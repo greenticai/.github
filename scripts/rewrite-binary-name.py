@@ -663,6 +663,24 @@ def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> 
                 assert isinstance(spec, dict)
                 deps[dep_name] = _merge_inline_with_workspace(spec, ws_deps[dep_name])
 
+    # [lints] table inheritance: `lints.workspace = true` pulls the entire
+    # [workspace.lints.*] tree into the member. The bifurcated copy writes
+    # an empty [workspace] block (see below), so a member-level
+    # `lints.workspace = true` would leave cargo looking for [workspace.lints]
+    # in the empty workspace block — fails with `workspace.lints was not
+    # defined`. Resolve by inlining the parent's [workspace.lints] tree.
+    # No-op when the member doesn't use [lints] inheritance (other dual-role
+    # binaries in the fleet don't, so this branch is dormant for them).
+    lints = data.get("lints")
+    if _is_workspace_inherit(lints):
+        ws_lints = ws_data.get("workspace", {}).get("lints")
+        if ws_lints is None:
+            sys.exit(
+                f"error: [{copy_manifest}] lints inherits from workspace but "
+                f"[workspace.lints] is not defined in {workspace_root}"
+            )
+        data["lints"] = ws_lints
+
     # Mark the copy as its own standalone workspace root. If there are sibling
     # Cargo.toml files under the copy (as in greentic-bundle where `crates/`
     # subdirectories came along with the package-at-workspace-root copy), list
