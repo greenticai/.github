@@ -206,6 +206,46 @@ def test_skip_crate_alias_not_bumped(root: Path) -> None:
     )
 
 
+def test_extension_sdk_crates_not_bumped(root: Path) -> None:
+    """`greentic-extension-sdk-*` crates live in greentic-designer-sdk, an
+    out-of-pipeline repo that only publishes stable 0.4.x. The bumper must
+    leave their version specs alone — otherwise consumers like
+    greentic-designer fail to resolve `>=1.1.0-dev` against crates that only
+    have 0.4.x candidates.
+    """
+    _write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = []\n\n"
+        "[workspace.dependencies]\n"
+        "greentic-extension-sdk-contract = \"0.4\"\n"
+        "greentic-extension-sdk-state = \"0.4\"\n"
+        "greentic-extension-sdk-registry = \"0.4\"\n"
+        "greentic-extension-sdk-testing = \"0.4\"\n"
+        "greentic-extension-sdk-cli = \"0.4\"\n"
+        "greentic-types = \"0.4\"\n",
+    )
+    _run(root)
+
+    deps = _load(root, "Cargo.toml")["workspace"]["dependencies"]
+    for name in (
+        "greentic-extension-sdk-contract",
+        "greentic-extension-sdk-state",
+        "greentic-extension-sdk-registry",
+        "greentic-extension-sdk-testing",
+        "greentic-extension-sdk-cli",
+    ):
+        _assert(
+            deps[name] == "0.4",
+            f"{name} should be untouched, got {deps[name]!r}",
+        )
+    # Sanity: a normal greentic crate next to them still gets bumped.
+    _assert(
+        deps["greentic-types"] == ">=0.5.0-0, <0.6.0-0",
+        f"adjacent greentic-types not bumped: {deps['greentic-types']!r}",
+    )
+
+
 def test_basic_string_dep_still_bumped(root: Path) -> None:
     """Regression: plain string deps still bump."""
     _write(
@@ -684,6 +724,7 @@ def main() -> int:
         test_runner_core_is_bumped,
         test_workspace_inherit_dep_marker_not_misclassified,
         test_skip_crate_alias_not_bumped,
+        test_extension_sdk_crates_not_bumped,
         test_basic_string_dep_still_bumped,
         test_pre_release_promotion_package_and_deps,
         test_pre_release_explicit_to_version_increments_dev_n,
