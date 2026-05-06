@@ -641,6 +641,7 @@ def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> 
         data = tomllib.load(fh)
 
     pkg = data.get("package", {})
+    inlined_path_fields: list[str] = []  # path-bearing fields just inlined from workspace
     for key, value in list(pkg.items()):
         if _is_workspace_inherit(value):
             if key not in ws_package:
@@ -649,6 +650,38 @@ def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> 
                     f"but [workspace.package].{key} is not defined in {workspace_root}"
                 )
             pkg[key] = ws_package[key]
+            if key in ("readme", "license-file", "build"):
+                inlined_path_fields.append(key)
+
+    # Cargo resolves path-bearing inherited fields (`readme`, `license-file`,
+    # `build`) relative to the WORKSPACE root, not the inheriting member. Once
+    # we inline the value into the bifurcate copy, cargo loses that hint and
+    # resolves relative to `target/bifurcate/<crate>-<suffix>/` instead — where
+    # the file doesn't exist. Copy each referenced file into the copy root
+    # and rewrite the value to the basename so the copy is self-contained.
+    # `_fixup_escaping_paths` (called earlier from stage_dual_role_copy) only
+    # handles `..`-prefixed paths and runs BEFORE inheritance is resolved, so
+    # bare-name inherited values like `readme = "README.md"` slip past it.
+    workspace_dir = workspace_root.parent
+    copy_dir = copy_manifest.parent
+    for field in inlined_path_fields:
+        value = pkg.get(field)
+        if not isinstance(value, str):
+            continue
+        # Skip absolute paths — cargo handles those without resolution.
+        if Path(value).is_absolute():
+            continue
+        source = (workspace_dir / value).resolve()
+        if not source.is_file():
+            sys.exit(
+                f"error: [{copy_manifest}] package.{field} = {value!r} "
+                f"(inherited from {workspace_root}) does not resolve to a file "
+                f"at {source}"
+            )
+        dest = copy_dir / source.name
+        if not dest.exists():
+            shutil.copy2(source, dest)
+        pkg[field] = source.name
 
     for deps_table in DEP_TABLES:
         deps = data.get(deps_table, {})
