@@ -63,10 +63,20 @@ EXTRA_GREENTIC_CRATES: frozenset[str] = frozenset(
 )
 
 # Crates on a separate version track — never touch their versions.
+#
+# `greentic-extension-sdk-*` crates live in greentic-designer-sdk, which is
+# NOT in REPO_MANIFEST.toml: it has no `develop` branch, no dev-publish
+# pipeline, and only ships stable 0.4.x to crates.io. Bumping consumers to
+# `>=1.1.0-dev` makes Cargo unable to resolve them.
 SKIP_CRATES: frozenset[str] = frozenset(
     {
         "serde_yaml_gtc",
         "serde_yaml_bw",
+        "greentic-extension-sdk-contract",
+        "greentic-extension-sdk-state",
+        "greentic-extension-sdk-registry",
+        "greentic-extension-sdk-testing",
+        "greentic-extension-sdk-cli",
     }
 )
 
