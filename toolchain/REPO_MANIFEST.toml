@@ -580,7 +580,20 @@ weekly-stable-enabled = true
 org = "greenticai"
 variant = "host"
 tier = 5
-publishes = []  # populate before deploying dev-publish
+# Listed leaf-first: types → events/ops → contracts → runtime → flow → greentic-x (CLI).
+# greentic-x is the dual-role binary (package=greentic-x, lib=gx, bin=greentic-x);
+# binary-bifurcation publishes the binary as `greentic-x-dev` on the dev lane.
+publishes = [
+    "greentic-x-types",
+    "greentic-x-events",
+    "greentic-x-ops",
+    "greentic-x-contracts",
+    "greentic-x-runtime",
+    "greentic-x-flow",
+    "greentic-x",
+]
+binary-crates = ["greentic-x"]
+dual-role-binary-crates = ["greentic-x"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
