@@ -181,7 +181,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-binaries-rc-${{ matrix.target }}
+          # Namespace by package so a parent that calls this reusable for
+          # multiple binaries doesn't collide on a shared (target) name and
+          # silently drop one set. Mirrors release-binaries.yml and
+          # dev-release-binaries.yml.
+          name: release-binaries-rc-${{ inputs.package }}-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -196,7 +200,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-binaries-rc-*
+          pattern: release-binaries-rc-${{ inputs.package }}-*
           merge-multiple: true
           path: .dist-staging
 
