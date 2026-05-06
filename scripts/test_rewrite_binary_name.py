@@ -1003,6 +1003,115 @@ workspace = true
     print("OK  test_dual_role_lints_inherit_missing_workspace_lints_errors")
 
 
+def test_dual_role_inherited_readme_copied_into_bifurcate_dir() -> None:
+    """Inherited [package.readme] points at a workspace-root file; the
+    bifurcate copy must include the file and rewrite the value to the basename.
+
+    Regression: greentic-x's gx crate uses ``readme.workspace = true`` to
+    inherit ``[workspace.package].readme = "README.md"``. Cargo resolves
+    inherited paths relative to the workspace root (where README.md lives),
+    but after the bifurcate copy inlines the value, cargo resolves relative
+    to ``target/bifurcate/greentic-x-dev/`` and errors with ``readme
+    `README.md` does not appear to exist``. ``_fixup_escaping_paths`` only
+    handles ``..``-prefixed paths and runs before inheritance is resolved.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(root, "README.md", "# top-level readme\n")
+        _write(root, "LICENSE-APACHE", "Apache-2.0 boilerplate\n")
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.4.2"
+readme = "README.md"
+license-file = "LICENSE-APACHE"
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+readme.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+""",
+        )
+        _write(root, "crates/mycrate/src/main.rs", "fn main() {}\n")
+
+        _run(root, "mycrate", "--dual-role")
+
+        copy_dir = root / "target" / "bifurcate" / "mycrate-dev"
+        copy = _load(copy_dir / "Cargo.toml")
+        pkg = copy["package"]
+        _assert(
+            pkg.get("readme") == "README.md",
+            f"readme should rewrite to basename, got {pkg.get('readme')!r}",
+        )
+        _assert(
+            pkg.get("license-file") == "LICENSE-APACHE",
+            f"license-file should rewrite to basename, got {pkg.get('license-file')!r}",
+        )
+        _assert(
+            (copy_dir / "README.md").is_file(),
+            "README.md must be copied into bifurcate dir for cargo publish",
+        )
+        _assert(
+            (copy_dir / "LICENSE-APACHE").is_file(),
+            "LICENSE-APACHE must be copied into bifurcate dir",
+        )
+    print("OK  test_dual_role_inherited_readme_copied_into_bifurcate_dir")
+
+
+def test_dual_role_inherited_readme_missing_at_workspace_errors() -> None:
+    """Inherited readme that doesn't resolve to an existing file errors clearly."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            """\
+[workspace]
+members = ["crates/mycrate"]
+
+[workspace.package]
+version = "0.4.2"
+readme = "MISSING.md"
+""",
+        )
+        _write(
+            root,
+            "crates/mycrate/Cargo.toml",
+            """\
+[package]
+name = "mycrate"
+version.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "mycrate"
+path = "src/main.rs"
+""",
+        )
+
+        proc = _run(root, "mycrate", "--dual-role", expect_fail=True)
+        _assert(
+            "readme" in proc.stderr and "does not resolve" in proc.stderr,
+            f"expected clear error about missing readme file, got: {proc.stderr!r}",
+        )
+    print("OK  test_dual_role_inherited_readme_missing_at_workspace_errors")
+
+
 def test_binstall_metadata_injected_when_absent() -> None:
     """Crate without [package.metadata.binstall] gets a default block pointing
     at the dev-release-binaries.yml archive layout."""
@@ -1567,6 +1676,8 @@ def main() -> int:
     test_dual_role_inherit_missing_key_errors()
     test_dual_role_resolves_workspace_lints_inherit()
     test_dual_role_lints_inherit_missing_workspace_lints_errors()
+    test_dual_role_inherited_readme_copied_into_bifurcate_dir()
+    test_dual_role_inherited_readme_missing_at_workspace_errors()
     test_binstall_metadata_injected_when_absent()
     test_binstall_injection_idempotent()
     test_binstall_existing_not_overwritten()
