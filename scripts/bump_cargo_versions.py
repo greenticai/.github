@@ -145,11 +145,17 @@ def _range_matches_prefix(version: str, prefix: str) -> bool:
     """Check if a version range spec contains the --from prefix.
 
     Matches patterns like:
-      ">=0.4.0-0, <0.5.0-0"
-      ">=0.4.52"
-      ">=0.4.31, <0.5"
+      ">=0.4.0-0, <0.5.0-0"      (canonical form)
+      ">=0.4.52"                  (no upper bound)
+      ">=0.4.31, <0.5"            (mixed precision)
+      ">=0.5, <0.7.0-0"           (loose lower bound — minor only)
+      ">=0.5"                     (loose, no upper bound)
+
+    Uses negative-lookahead ``(?!\\d)`` so prefix ``0.5`` matches ``0.5`` /
+    ``0.5.x`` / ``0.5,`` / ``0.5 `` / end-of-string but NOT ``0.50`` (next
+    char is a digit, so it's a different version).
     """
-    return bool(re.search(rf">={re.escape(prefix)}[\.\d]", version))
+    return bool(re.search(rf">={re.escape(prefix)}(?!\d)", version))
 
 
 def _make_range(to_major: int, to_minor: int, *, pre_release: bool = False) -> str:
