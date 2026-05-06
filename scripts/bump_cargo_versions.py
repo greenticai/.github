@@ -5,7 +5,9 @@ Walks all Cargo.toml files under a directory and bumps:
   - package / workspace.package versions matching --from prefix
   - greentic dependency version specs to a pre-release-compatible range
 
-Uses tomllib (read) + tomli_w (write) for structure-aware TOML editing.
+Uses tomlkit for format-preserving TOML editing: only the rewritten version
+strings appear in the diff; whitespace, comments, inline-table styling, and
+[[bench]] / [[bin]] table-arrays are preserved byte-for-byte.
 
 Examples
 --------
@@ -37,10 +39,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import tomllib
 from pathlib import Path
 
-import tomli_w
+import tomlkit
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -75,42 +76,6 @@ DEP_SECTIONS: tuple[str, ...] = (
     "dev-dependencies",
     "build-dependencies",
 )
-
-# Keys in [package] / [workspace.package] that Cargo's manifest parser expects
-# to be either a string or an inline table — never a sub-table.  When tomli_w
-# round-trips a workspace-inheritance value (`{"workspace": True}`) at one of
-# these keys it emits `[package.version]\nworkspace = true` (sub-table form),
-# which Cargo rejects with "expected a version string or an inline table".
-# Workaround: before dumping, swap the dict for a sentinel string so tomli_w
-# emits a leaf key; afterwards rewrite the sentinel back to dotted-key form.
-INHERITABLE_PACKAGE_KEYS: frozenset[str] = frozenset(
-    {
-        "version",
-        "edition",
-        "rust-version",
-        "license",
-        "license-file",
-        "authors",
-        "categories",
-        "description",
-        "documentation",
-        "homepage",
-        "keywords",
-        "publish",
-        "readme",
-        "repository",
-        "exclude",
-        "include",
-        "links",
-    }
-)
-
-WORKSPACE_INHERIT_SENTINEL: str = "__GREENTIC_WORKSPACE_INHERIT__"
-_SENTINEL_LINE_RE = re.compile(
-    rf'^(?P<indent>[ \t]*)(?P<key>[A-Za-z0-9_-]+)\s*=\s*"{re.escape(WORKSPACE_INHERIT_SENTINEL)}"\s*$',
-    re.MULTILINE,
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -210,24 +175,6 @@ def _make_range(to_major: int, to_minor: int, *, pre_release: bool = False) -> s
     return f">={to_major}.{to_minor}.0-{lower}, <{to_major}.{next_minor}.0-0"
 
 
-def _is_workspace_inherit(value: object) -> bool:
-    """True if *value* is a `{workspace = true}` inheritance marker."""
-    return isinstance(value, dict) and value == {"workspace": True}
-
-
-def _substitute_workspace_inherit(pkg: dict) -> None:
-    """Replace ``{workspace=true}`` dicts at inheritable keys with a sentinel
-    string so tomli_w emits a leaf key.  See INHERITABLE_PACKAGE_KEYS."""
-    for key in list(pkg.keys()):
-        if key in INHERITABLE_PACKAGE_KEYS and _is_workspace_inherit(pkg[key]):
-            pkg[key] = WORKSPACE_INHERIT_SENTINEL
-
-
-def _restore_workspace_inherit(text: str) -> str:
-    """Rewrite sentinel leaf keys back to ``key.workspace = true`` form."""
-    return _SENTINEL_LINE_RE.sub(r"\g<indent>\g<key>.workspace = true", text)
-
-
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -258,38 +205,38 @@ class Bumper:
     # -- public entry point ------------------------------------------------
 
     def process_file(self, path: Path) -> None:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        text = path.read_text(encoding="utf-8")
+        doc = tomlkit.parse(text)
 
         changes: list[str] = []
 
-        ws = data.get("workspace", {})
+        ws = doc.get("workspace") or {}
 
         # 1) workspace.package.version (skip in --deps-only mode)
         if not self.deps_only:
-            ws_pkg = ws.get("package", {})
+            ws_pkg = ws.get("package") or {}
             self._bump_package_version(ws_pkg, changes)
 
             # 2) package.version  (only if it's a plain string, not workspace=true)
-            pkg = data.get("package", {})
+            pkg = doc.get("package") or {}
             self._bump_package_version(pkg, changes)
 
         # 3) workspace.dependencies
-        ws_deps = ws.get("dependencies", {})
+        ws_deps = ws.get("dependencies") or {}
         self._bump_deps(ws_deps, changes)
 
         # 4) top-level dep sections
         for section in DEP_SECTIONS:
-            deps = data.get(section, {})
+            deps = doc.get(section) or {}
             self._bump_deps(deps, changes, section_label=section)
 
         # 5) target-specific dep sections
-        targets = data.get("target", {})
+        targets = doc.get("target") or {}
         for target_key, target_val in targets.items():
             if not isinstance(target_val, dict):
                 continue
             for section in DEP_SECTIONS:
-                deps = target_val.get(section, {})
+                deps = target_val.get(section) or {}
                 self._bump_deps(
                     deps, changes, section_label=f"target.{target_key}.{section}"
                 )
@@ -306,15 +253,7 @@ class Bumper:
             print(f"  {c}")
 
         if not self.dry_run:
-            # Sentinel-substitute workspace-inheritance dicts so tomli_w emits
-            # a leaf key instead of a sub-table; restore as dotted-key after.
-            _substitute_workspace_inherit(ws.get("package", {}))
-            _substitute_workspace_inherit(data.get("package", {}))
-
-            text = tomli_w.dumps(data)
-            text = _restore_workspace_inherit(text)
-            with open(path, "wb") as f:
-                f.write(text.encode("utf-8"))
+            path.write_text(tomlkit.dumps(doc), encoding="utf-8")
 
     # -- internals ---------------------------------------------------------
 
