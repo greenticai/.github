@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED from greenticai/greentic@bcc0420 — do not edit directly -->
+<!-- AUTO-GENERATED from greenticai/greentic@6596b9f — do not edit directly -->
 
 # Greentic — The Digital Workers OS
 
@@ -66,6 +66,11 @@ gtc wizard --answers https://github.com/greenticai/greentic-demo/releases/latest
 gtc setup --no-ui ./cloud-deploy-demo-bundle --answers https://github.com/greenticai/greentic-demo/releases/latest/download/cloud-deploy-demo-setup-answers.json
 gtc start ./cloud-deploy-demo-bundle
 ```
+
+Notes:
+- For AWS, `gtc start` now defaults the bundle publish base to `oci://ghcr.io/greenticai/bundles/runtime` when it needs to publish a locally built `.gtbundle` for cloud deploy.
+- In interactive runs, `gtc` will show that default and let you keep it or change it.
+- You can still override it explicitly with `GREENTIC_DEPLOY_BUNDLE_PUBLISH_BASE`.
 
 Greentic is designed so the path from local proof-of-value to production deployment is short, explicit, and repeatable.
 
