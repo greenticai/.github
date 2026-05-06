@@ -180,7 +180,13 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-binaries-${{ matrix.target }}
+          # Namespace by package: parent workflows that call this reusable
+          # twice (e.g. greentic-mcp repo releases both greentic-mcp and
+          # greentic-mcp-exec) share one workflow-run artifact scope, so a
+          # bare release-binaries-${target} name collides between callers and
+          # one set is silently dropped. Including inputs.package keeps the
+          # names unique per (package, target) pair.
+          name: release-binaries-${{ inputs.package }}-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -193,7 +199,11 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-binaries-*
+          # Only this package's artifacts: in multi-binary repos two parallel
+          # callers each run their own attach-to-release; without a package
+          # filter both jobs would download every package's archives and
+          # race-clobber each other on `gh release upload --clobber`.
+          pattern: release-binaries-${{ inputs.package }}-*
           merge-multiple: true
           path: .dist-staging
 
@@ -238,7 +248,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-binaries-*
+          pattern: release-binaries-${{ inputs.package }}-*
           merge-multiple: true
           path: .dist-staging
 
