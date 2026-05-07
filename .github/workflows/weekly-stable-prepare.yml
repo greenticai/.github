@@ -40,18 +40,27 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Mint GitHub App token (org-wide)
-        id: app-token
+      - name: Mint GitHub App token (greenticai)
+        id: app-token-greenticai
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
           private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          owner: greenticai
+
+      - name: Mint GitHub App token (greentic-biz)
+        id: app-token-greentic-biz
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: greentic-biz
 
       - name: Prepare release PRs
         id: run
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN_GREENTICAI:   ${{ steps.app-token-greenticai.outputs.token }}
+          GH_TOKEN_GREENTIC_BIZ: ${{ steps.app-token-greentic-biz.outputs.token }}
           INPUT_REPO: ${{ inputs.repo }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_DRY_RUN: ${{ inputs.dry-run }}

@@ -27,11 +27,16 @@
 #   --dry-run             Show what would change, change nothing
 #
 # Environment:
-#   GH_TOKEN              Required in --remote mode. PAT or GitHub App token with
-#                         repo-write scope across the target org and greenticai/.github.
-#   GREENTIC_WORKSPACE    Override the local workspace root (default: parent of .github repo)
-#   GIT_AUTHOR_NAME       Override commit author name (default: github-actions[bot])
-#   GIT_AUTHOR_EMAIL      Override commit author email
+#   GH_TOKEN_GREENTICAI    App token scoped to the greenticai org installation
+#                          (used for the target repo when --org greenticai, and
+#                          always for the manifest PR against greenticai/.github)
+#   GH_TOKEN_GREENTIC_BIZ  App token scoped to the greentic-biz org installation
+#                          (used for the target repo when --org greentic-biz)
+#   GH_TOKEN               Fallback when per-org tokens aren't set (e.g. local runs).
+#                          Required in --remote mode if the per-org tokens are absent.
+#   GREENTIC_WORKSPACE     Override the local workspace root (default: parent of .github repo)
+#   GIT_AUTHOR_NAME        Override commit author name (default: github-actions[bot])
+#   GIT_AUTHOR_EMAIL       Override commit author email
 #
 # Requires: gh (GitHub CLI), git, python3. cargo only if `cargo fmt` should run.
 
@@ -180,10 +185,25 @@ cleanup_tmpdirs() {
 trap cleanup_tmpdirs EXIT
 
 if [[ "$MODE" == "remote" ]]; then
-  if [[ -z "${GH_TOKEN:-}" ]]; then
-    echo -e "${RED}Error: --remote mode requires GH_TOKEN env var${RESET}" >&2
+  # Resolve per-org tokens with single-token fallback for local invocation.
+  GH_TOKEN_GREENTICAI="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+  GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN_GREENTIC_BIZ:-${GH_TOKEN:-}}"
+
+  # Pick the token for the target org. The manifest PR section later
+  # explicitly switches to GH_TOKEN_GREENTICAI for the greenticai/.github clone.
+  case "$ORG" in
+    greenticai)   GH_TOKEN="$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) GH_TOKEN="$GH_TOKEN_GREENTIC_BIZ" ;;
+    *)            echo -e "${RED}Error: unknown org '$ORG'${RESET}" >&2; exit 1 ;;
+  esac
+
+  if [[ -z "$GH_TOKEN" ]]; then
+    token_var="GH_TOKEN_${ORG//-/_}"
+    token_var="${token_var^^}"
+    echo -e "${RED}Error: --remote mode requires ${token_var} (or GH_TOKEN as fallback)${RESET}" >&2
     exit 1
   fi
+  export GH_TOKEN
   if ! command -v gh >/dev/null 2>&1; then
     echo -e "${RED}Error: --remote mode requires the 'gh' CLI${RESET}" >&2
     exit 1
@@ -867,6 +887,17 @@ update_manifest_remote() {
     log_skip "Skipped (--skip-manifest)"
     return
   fi
+
+  # The manifest lives in greenticai/.github regardless of the target org, so
+  # this whole function must use the greenticai-scoped App token. Override
+  # $GH_TOKEN locally; the caller's token is restored on return.
+  local GH_TOKEN="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+  if [[ -z "$GH_TOKEN" ]]; then
+    log_fail "No GH_TOKEN_GREENTICAI available — cannot open manifest PR"
+    ((failed++)) || true
+    return
+  fi
+  export GH_TOKEN
 
   # Read from the local canonical copy first — fast check to see if we even
   # need to open a PR. This is accurate enough because the workflow checks out

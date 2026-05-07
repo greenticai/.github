@@ -9,7 +9,9 @@
 # Non-zero stall list → emit a Slack alert (via webhook). Zero stalls → noop.
 #
 # Environment:
-#   GH_TOKEN                  — GitHub PAT/App with repo scope across the orgs
+#   GH_TOKEN_GREENTICAI       — App token scoped to greenticai org installation
+#   GH_TOKEN_GREENTIC_BIZ     — App token scoped to greentic-biz org installation
+#   GH_TOKEN                  — Fallback when per-org tokens aren't set (e.g. local runs)
 #   SLACK_WEBHOOK_RELEASE_ALERTS — webhook URL (optional; if unset, log only)
 #   STALL_THRESHOLD_DAYS      — (optional) stall threshold, default 30
 #   INPUT_DRY_RUN             — (optional) "true" skips webhook POST
@@ -20,9 +22,28 @@ MANIFEST="toolchain/REPO_MANIFEST.toml"
 THRESHOLD_DAYS="${STALL_THRESHOLD_DAYS:-30}"
 DRY_RUN="${INPUT_DRY_RUN:-false}"
 
+# Per-org tokens, with single-token fallback for local invocation.
+GH_TOKEN_GREENTICAI="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN_GREENTIC_BIZ:-${GH_TOKEN:-}}"
+
 log()  { echo "$1"; }
 warn() { echo "::warning::$1"; }
 err()  { echo "::error::$1"; }
+
+token_for_org() {
+  case "$1" in
+    greenticai)   echo "$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) echo "$GH_TOKEN_GREENTIC_BIZ" ;;
+    *)            echo "::error::Unknown org '$1' — no token available" >&2; return 1 ;;
+  esac
+}
+
+# Reachability precheck. Catches token-scope or App-installation gaps so we
+# don't silently mis-skip a whole org as "no version on develop".
+repo_reachable() {
+  local repo="$1"
+  gh api "repos/$repo" --silent 2>/dev/null
+}
 
 # ── Parse manifest — emit "org\tname" for every non-archived repo ─
 get_repos() {
@@ -116,6 +137,19 @@ checked=0
 while IFS=$'\t' read -r org name; do
   full="$org/$name"
   ((checked++)) || true
+
+  # Per-org App token for `gh api` calls below.
+  GH_TOKEN="$(token_for_org "$org")" || continue
+  if [[ -z "$GH_TOKEN" ]]; then
+    warn "$name — no token available for org '$org', skipping"
+    continue
+  fi
+  export GH_TOKEN
+
+  if ! repo_reachable "$full"; then
+    warn "$name — repo unreachable (token scope or App not installed in '$org'?), skipping"
+    continue
+  fi
 
   ver=$(get_develop_version "$full" 2>/dev/null || echo "")
   [[ -z "$ver" ]] && continue

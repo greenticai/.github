@@ -20,11 +20,13 @@
 #   - Combined: dormant repos keep N, active repos keep N + last-N-days.
 #
 # Inputs (env):
-#   GH_TOKEN          — GitHub App token with `contents: write` on each repo
-#   DRY_RUN           — "true" to preview without deleting (default: false)
-#   RETENTION_DAYS    — Age threshold in days (default: 30)
-#   KEEP_LATEST       — Always keep this many most-recent releases (default: 3)
-#   SINGLE_REPO       — Process only this repo (empty = all binary-bifurcated)
+#   GH_TOKEN_GREENTICAI    — App token scoped to greenticai org installation
+#   GH_TOKEN_GREENTIC_BIZ  — App token scoped to greentic-biz org installation
+#   GH_TOKEN               — Fallback when per-org tokens aren't set (e.g. local runs)
+#   DRY_RUN                — "true" to preview without deleting (default: false)
+#   RETENTION_DAYS         — Age threshold in days (default: 30)
+#   KEEP_LATEST            — Always keep this many most-recent releases (default: 3)
+#   SINGLE_REPO            — Process only this repo (empty = all binary-bifurcated)
 
 set -euo pipefail
 
@@ -35,6 +37,23 @@ DRY_RUN="${DRY_RUN:-false}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 KEEP_LATEST="${KEEP_LATEST:-3}"
 SINGLE_REPO="${SINGLE_REPO:-}"
+
+# Per-org tokens, with single-token fallback for local invocation.
+GH_TOKEN_GREENTICAI="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN_GREENTIC_BIZ:-${GH_TOKEN:-}}"
+
+token_for_org() {
+  case "$1" in
+    greenticai)   echo "$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) echo "$GH_TOKEN_GREENTIC_BIZ" ;;
+    *)            echo "::error::Unknown org '$1' — no token available" >&2; return 1 ;;
+  esac
+}
+
+repo_reachable() {
+  local repo="$1"
+  gh api "repos/$repo" --silent 2>/dev/null
+}
 
 if ! [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
   echo "::error::RETENTION_DAYS must be a non-negative integer, got '${RETENTION_DAYS}'"
@@ -86,6 +105,23 @@ for repo in "${repos[@]}"; do
 
   ((total_repos++)) || true
   echo "::group::$repo"
+
+  # Per-org App token for the `gh` calls below. Fail loud on token-scope or
+  # App-installation gaps so we don't silently misclassify private repos.
+  org="${repo%%/*}"
+  GH_TOKEN="$(token_for_org "$org")" || { ((total_failed++)) || true; echo "::endgroup::"; continue; }
+  if [ -z "$GH_TOKEN" ]; then
+    echo "::warning::$repo — no token available for org '$org', skipping"
+    echo "::endgroup::"
+    continue
+  fi
+  export GH_TOKEN
+
+  if ! repo_reachable "$repo"; then
+    echo "::warning::$repo — repo unreachable (token scope or App not installed in '$org'?), skipping"
+    echo "::endgroup::"
+    continue
+  fi
 
   # Sorted DESC by createdAt (gh release list default ordering is by created
   # date descending). Filter to dev-build prereleases via --jq.
