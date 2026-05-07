@@ -74,18 +74,27 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.95.0
 
-      - name: Mint GitHub App token (org-wide)
-        id: app-token
+      - name: Mint GitHub App token (greenticai)
+        id: app-token-greenticai
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
           private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          owner: greenticai
+
+      - name: Mint GitHub App token (greentic-biz)
+        id: app-token-greentic-biz
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+          owner: greentic-biz
 
       - name: Sync Cargo.lock across repos
         id: sync
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN_GREENTICAI:   ${{ steps.app-token-greenticai.outputs.token }}
+          GH_TOKEN_GREENTIC_BIZ: ${{ steps.app-token-greentic-biz.outputs.token }}
         run: bash scripts/nightly-cargo-lock-sync.sh
 
   notify-success:
