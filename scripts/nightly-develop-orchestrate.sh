@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 # nightly-develop-orchestrate.sh — Tier-ordered dev-publish orchestration
 #
-# Dispatches dev-publish.yml across repos in tier order (0→8).
+# Dispatches dev-publish.yml across repos in tier order (0→9).
 # Repos within a tier are dispatched in parallel, then waited on.
 # Change-aware: skips repos with no source or upstream changes.
 #
 # Environment:
-#   GH_TOKEN     — GitHub PAT/App token with actions:write across the org
-#   INPUT_TIER   — (optional) Process a specific tier only
-#   INPUT_FORCE  — (optional) "true" to skip change detection
+#   GREENTIC_CI_APP_ID           — App ID for token minting (required in CI)
+#   GREENTIC_CI_APP_PRIVATE_KEY  — App PEM key for token minting (required in CI)
+#   GH_TOKEN                     — fallback for local invocation only; in CI
+#                                  the script mints per-org tokens itself
+#   INPUT_TIER                   — (optional) Process a specific tier only
+#   INPUT_FORCE                  — (optional) "true" to skip change detection
 #
-# Prerequisites:
-#   - GH_NIGHTLY_TOKEN org secret: PAT or GitHub App with actions:write
-#     scope on all repos. GITHUB_TOKEN cannot dispatch cross-repo workflows.
-#   - Each target repo must have dev-publish.yml on the develop branch
-#     (deployed by sync-dev-publish.sh).
+# Why mint internally instead of accepting one upfront token:
+#   App installation tokens have a 1-hour TTL. A nightly orchestrate run can
+#   easily run >1h (long binary repos in tier 7 alone routinely take 15 min).
+#   Once the seed token expires mid-run, every `gh run view` poll returns
+#   401, wait_for_all interprets that as "still pending", and the tier
+#   stalls until MAX_WAIT (3600s) before being declared a phantom timeout.
+#   Re-minting on demand here means the script is robust to its own length.
+#   It also lets a single script touch both greenticai and greentic-biz
+#   repos (one App, two installations) without the workflow having to
+#   pre-mint two tokens upfront.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MANIFEST="toolchain/REPO_MANIFEST.toml"
 WORKFLOW="dev-publish.yml"
@@ -25,9 +35,87 @@ POLL_INTERVAL=30    # seconds between status polls
 MAX_WAIT=3600       # max seconds to wait per tier (1 hour)
 DISPATCH_DETECT=5   # seconds between dispatch detection polls
 DISPATCH_TIMEOUT=24 # max polls to detect dispatched run (24*5s = 2min)
+TOKEN_REFRESH_SEC=2700  # re-mint at 45 min — leaves 15 min headroom on 1h TTL
 
 FORCE="${INPUT_FORCE:-false}"
 TIER_FILTER="${INPUT_TIER:-}"
+
+# ── Per-org token state ──────────────────────────────────────────
+# Cached token + last-mint timestamp per org. ensure_token_for_org()
+# refreshes automatically when older than TOKEN_REFRESH_SEC. Local-dev fallback:
+# if APP_ID/PRIVATE_KEY are not set, treat $GH_TOKEN as both org tokens
+# (caller is responsible for ensuring it covers any repos they touch).
+GH_TOKEN_GREENTICAI=""
+GH_TOKEN_GREENTIC_BIZ=""
+GH_TOKEN_GREENTICAI_AT=0
+GH_TOKEN_GREENTIC_BIZ_AT=0
+HAVE_APP_CREDS=true
+if [[ -z "${GREENTIC_CI_APP_ID:-}" || -z "${GREENTIC_CI_APP_PRIVATE_KEY:-}" ]]; then
+  HAVE_APP_CREDS=false
+  GH_TOKEN_GREENTICAI="${GH_TOKEN:-}"
+  GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN:-}"
+fi
+
+mint_token_for_org() {
+  local org="$1"
+  local now token
+  now=$(date +%s)
+  if ! token=$("$SCRIPT_DIR/mint-app-token.sh" "$org" 2>&1); then
+    echo "::error::Failed to mint App token for $org: $token" >&2
+    return 1
+  fi
+  case "$org" in
+    greenticai)
+      GH_TOKEN_GREENTICAI="$token"
+      GH_TOKEN_GREENTICAI_AT=$now
+      ;;
+    greentic-biz)
+      GH_TOKEN_GREENTIC_BIZ="$token"
+      GH_TOKEN_GREENTIC_BIZ_AT=$now
+      ;;
+    *)
+      echo "::error::Unknown org '$org' for mint" >&2
+      return 1
+      ;;
+  esac
+}
+
+# Ensures a fresh token is cached for $org and exports GH_TOKEN to it.
+# No stdout capture — the token cache lives in globals, and capturing the
+# return value via $(...) would put mint_token_for_org in a subshell, losing
+# the cached value the moment the subshell exits.
+ensure_token_for_org() {
+  local org="$1"
+  local cached_at=0
+  case "$org" in
+    greenticai)   cached_at=$GH_TOKEN_GREENTICAI_AT ;;
+    greentic-biz) cached_at=$GH_TOKEN_GREENTIC_BIZ_AT ;;
+    *)            echo "::error::Unknown org '$org'" >&2; return 1 ;;
+  esac
+
+  if [[ "$HAVE_APP_CREDS" == true ]]; then
+    local now age
+    now=$(date +%s)
+    age=$((now - cached_at))
+    if [[ $cached_at -eq 0 || $age -ge $TOKEN_REFRESH_SEC ]]; then
+      mint_token_for_org "$org" || return 1
+    fi
+  fi
+
+  case "$org" in
+    greenticai)   GH_TOKEN="$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) GH_TOKEN="$GH_TOKEN_GREENTIC_BIZ" ;;
+  esac
+  export GH_TOKEN
+}
+
+# Convenience wrapper: ensure a fresh GH_TOKEN for the repo's org. Call at
+# the top of any function block that runs gh CLI / curl against $repo.
+use_token_for_repo() {
+  local repo="$1"
+  local org="${repo%%/*}"
+  ensure_token_for_org "$org"
+}
 
 # Counters
 dispatched=0
@@ -90,6 +178,8 @@ get_failed_job_details() {
   local repo="$1"
   local run_id="$2"
 
+  use_token_for_repo "$repo" || return 1
+
   gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" \
     --jq '(
         [.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required" or .conclusion == "startup_failure")]
@@ -104,6 +194,8 @@ get_failed_job_details() {
 # Returns 0 if repo needs publishing, 1 if no changes.
 has_changes() {
   local repo="$1"  # org/name format
+
+  use_token_for_repo "$repo" || return 0  # can't auth → assume changed
 
   # Last successful dev-publish run SHA on develop
   local last_sha
@@ -127,6 +219,8 @@ has_changes() {
 # Dispatches workflow_dispatch and returns the new run ID.
 dispatch() {
   local repo="$1"
+
+  use_token_for_repo "$repo" || return 1
 
   # Record latest run ID before dispatch (monotonically increasing)
   local before_id
@@ -177,6 +271,14 @@ wait_for_all() {
       local repo="${entry%%:*}"
       local run_id="${entry##*:}"
       local name="${repo##*/}"
+
+      # Refresh-aware token select per repo so long polls don't 401 on
+      # an expired token mid-wait.
+      use_token_for_repo "$repo" || {
+        warn "could not select token for $name"
+        ((pending++)) || true
+        continue
+      }
 
       local result
       if ! result=$(gh run view "$run_id" --repo "$repo" \
@@ -250,6 +352,26 @@ process_tier() {
   for full in "${repos[@]}"; do
     local name="${full##*/}"
 
+    # Token must be valid for this repo's org before any gh call.
+    if ! use_token_for_repo "$full"; then
+      log "  ✗ $name — no token for org"
+      record_failure "$full" "$tier" "No App token available for org"
+      append_failure_line "$full" "$tier" "No App token available for org"
+      ((failed++)) || true
+      continue
+    fi
+
+    # Verify the repo is reachable with the current token before treating a
+    # missing develop branch as authoritative — otherwise an App installation
+    # gap on a private biz repo would silently masquerade as "no branch".
+    if ! gh api "repos/$full" --silent 2>/dev/null; then
+      err "$name — repo unreachable with current token (App installation missing on this org?)"
+      record_failure "$full" "$tier" "Repo unreachable — App installation likely missing"
+      append_failure_line "$full" "$tier" "Repo unreachable — App installation likely missing"
+      ((failed++)) || true
+      continue
+    fi
+
     # Check develop branch exists via API
     if ! gh api "repos/$full/git/ref/heads/$BRANCH" --silent 2>/dev/null; then
       log "  ⊘ $name — no $BRANCH branch"
@@ -305,6 +427,7 @@ process_tier() {
         local status="unknown"
         local conclusion
         local result
+        use_token_for_repo "$repo" || true
         result=$(gh run view "$rid" --repo "$repo" \
           --json status,conclusion \
           --jq '[.status // "", .conclusion // ""] | @tsv' 2>/dev/null) || result=$'unknown\tfailure'
