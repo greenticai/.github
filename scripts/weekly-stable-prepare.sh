@@ -12,14 +12,12 @@
 # turn triggers crates-publish.yml in each repo to publish to crates.io.
 #
 # Environment:
-#   GH_TOKEN      — GitHub PAT/App token with repo scope across the orgs
-#   INPUT_REPO    — (optional) Process a single repo by name
-#   INPUT_TIER    — (optional) Process a specific tier only
-#   INPUT_DRY_RUN — (optional) "true" to preview without creating branches/PRs
-#
-# Prerequisites:
-#   - GH_NIGHTLY_TOKEN org secret: PAT or GitHub App with repo scope
-#     on all repos. GITHUB_TOKEN cannot create cross-repo PRs.
+#   GH_TOKEN_GREENTICAI    — App token scoped to greenticai org installation
+#   GH_TOKEN_GREENTIC_BIZ  — App token scoped to greentic-biz org installation
+#   GH_TOKEN               — Fallback when per-org tokens aren't set (e.g. local runs)
+#   INPUT_REPO             — (optional) Process a single repo by name
+#   INPUT_TIER             — (optional) Process a specific tier only
+#   INPUT_DRY_RUN          — (optional) "true" to preview without creating branches/PRs
 
 set -euo pipefail
 
@@ -29,6 +27,10 @@ RELEASE_LABEL="release"
 DRY_RUN="${INPUT_DRY_RUN:-false}"
 REPO_FILTER="${INPUT_REPO:-}"
 TIER_FILTER="${INPUT_TIER:-}"
+
+# Per-org tokens, with single-token fallback for local invocation.
+GH_TOKEN_GREENTICAI="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN_GREENTIC_BIZ:-${GH_TOKEN:-}}"
 
 # Counters
 prepared=0
@@ -42,6 +44,21 @@ prepared_details=""
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
 warn() { echo "::warning::$1"; }
+
+token_for_org() {
+  case "$1" in
+    greenticai)   echo "$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) echo "$GH_TOKEN_GREENTIC_BIZ" ;;
+    *)            echo "::error::Unknown org '$1' — no token available" >&2; return 1 ;;
+  esac
+}
+
+# Reachability precheck. Catches token-scope or App-installation gaps so we
+# fail loud instead of misclassifying private repos as "Repository not found".
+repo_reachable() {
+  local repo="$1"
+  gh api "repos/$repo" --silent 2>/dev/null
+}
 
 # ── Parse manifest ───────────────────────────────────────────────
 # Output: tab-separated "tier\torg\tname\tcrates\tauto_merge" lines.
@@ -193,6 +210,26 @@ prepare_release() {
   local crates="$3"   # space-separated crate list
   local tier="$4"
   local auto_merge="$5"
+
+  # Select the per-org App token. Both `gh` and any clone/push URLs below
+  # pick this up via $GH_TOKEN, so set it for the duration of this call.
+  local org="${repo%%/*}"
+  local GH_TOKEN
+  GH_TOKEN="$(token_for_org "$org")" || { ((failed++)) || true; return 1; }
+  if [[ -z "$GH_TOKEN" ]]; then
+    err "$name — no token available for org '$org'"
+    ((failed++)) || true
+    return 1
+  fi
+  export GH_TOKEN
+
+  # Reachability — fail loud on auth/scope errors so we never silently
+  # mis-skip a whole org's repos.
+  if ! repo_reachable "$repo"; then
+    err "$name — repo unreachable (token scope or App not installed in '$org'?)"
+    ((failed++)) || true
+    return 1
+  fi
 
   # 1. Check for existing open release PR
   if has_open_release_pr "$repo"; then
