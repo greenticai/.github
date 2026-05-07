@@ -16,7 +16,9 @@
 #      for manual resolution.
 #
 # Env expected from the calling workflow:
-#   GH_TOKEN                       — GitHub App token (owner-scoped)
+#   GH_TOKEN_GREENTICAI    — App token scoped to greenticai org installation
+#   GH_TOKEN_GREENTIC_BIZ  — App token scoped to greentic-biz org installation
+#   GH_TOKEN               — Fallback when per-org tokens aren't set (e.g. local runs)
 
 set -uo pipefail
 
@@ -28,6 +30,26 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
 warn() { echo "::warning::$1"; }
+
+# Per-org tokens, with single-token fallback for local invocation.
+GH_TOKEN_GREENTICAI="${GH_TOKEN_GREENTICAI:-${GH_TOKEN:-}}"
+GH_TOKEN_GREENTIC_BIZ="${GH_TOKEN_GREENTIC_BIZ:-${GH_TOKEN:-}}"
+
+token_for_org() {
+  case "$1" in
+    greenticai)   echo "$GH_TOKEN_GREENTICAI" ;;
+    greentic-biz) echo "$GH_TOKEN_GREENTIC_BIZ" ;;
+    *)            echo "::error::Unknown org '$1' — no token available" >&2; return 1 ;;
+  esac
+}
+
+# Reachability precheck. Catches token-scope or App-installation gaps so we
+# fail loud instead of misclassifying a whole org as "Repository not found"
+# (which is what GitHub returns to unauthorized tokens on private repos).
+repo_reachable() {
+  local repo="$1"
+  gh api "repos/$repo" --silent 2>/dev/null
+}
 
 # ── Collect all Greentic-owned crate names from the manifest
 collect_greentic_crates() {
@@ -67,9 +89,29 @@ out_pr_url=""
 
 process_repo() {
   local full="$1"       # org/name
+  local org="${full%%/*}"
   local name="${full##*/}"
   out_status=""
   out_pr_url=""
+
+  # Select the per-org App token. Both `gh` and the clone/push URLs below
+  # pick this up via $GH_TOKEN, so set it for the duration of this call.
+  local GH_TOKEN
+  GH_TOKEN="$(token_for_org "$org")" || { out_status="failed"; return 0; }
+  if [[ -z "$GH_TOKEN" ]]; then
+    err "[$name] no token available for org '$org'"
+    out_status="failed"
+    return 0
+  fi
+  export GH_TOKEN
+
+  # Reachability — fail loud on auth/scope errors so we never silently
+  # mis-skip a whole org's repos as "Repository not found" again.
+  if ! repo_reachable "$full"; then
+    err "[$name] repo unreachable (token scope or App not installed in '$org'?)"
+    out_status="failed"
+    return 0
+  fi
 
   local dir="$WORK_DIR/$name"
   local auth_url="https://x-access-token:${GH_TOKEN}@github.com/${full}.git"
