@@ -93,12 +93,17 @@ process_repo() {
     return 0
   fi
 
-  # Which Greentic crates appear in this lock?
-  local lock_crates
-  lock_crates=$(python3 -c "
-import tomllib, pathlib, sys
+  # Which (name, version) pairs appear in this lock? One per line as "name<TAB>version".
+  # We disambiguate by version because the lock can briefly carry multiple versions
+  # of the same Greentic crate during forward-port windows (e.g. old stable 0.5.2
+  # pulled in transitively + freshly-published 1.1.0-dev.{RUN_ID}). Bare `-p name`
+  # would error: `specification \`<name>\` is ambiguous`.
+  local lock_pkgs
+  lock_pkgs=$(python3 -c "
+import tomllib, pathlib
 data = tomllib.loads(pathlib.Path('$dir/Cargo.lock').read_text())
-print('\n'.join(sorted({p['name'] for p in data.get('package', [])})))
+for p in data.get('package', []):
+    print(p['name'] + '\t' + p['version'])
 " 2>/dev/null || true)
 
   # Which crates are workspace members? (cargo update rejects those with -p)
@@ -112,13 +117,17 @@ except Exception:
     pass
 " 2>/dev/null || true )
 
-  # Build -p filter from the intersection
+  # Build -p filter as `name@version` for every version of each Greentic crate
+  # present in the lock (skipping workspace members).
   local pkg_args=()
   while IFS= read -r crate; do
     [[ -z "$crate" ]] && continue
-    grep -qxF "$crate" <<<"$lock_crates" || continue
     grep -qxF "$crate" <<<"$workspace_members" && continue
-    pkg_args+=(-p "$crate")
+    while IFS=$'\t' read -r pkg_name pkg_version; do
+      [[ "$pkg_name" == "$crate" ]] || continue
+      [[ -z "$pkg_version" ]] && continue
+      pkg_args+=(-p "${crate}@${pkg_version}")
+    done <<<"$lock_pkgs"
   done <<<"$GREENTIC_CRATES"
 
   if [[ ${#pkg_args[@]} -eq 0 ]]; then
