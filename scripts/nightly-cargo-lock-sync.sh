@@ -211,17 +211,26 @@ except Exception:
     git commit --quiet -m "chore(nightly): cargo update — $(date -u +%Y-%m-%d)"
   )
 
-  # --force-with-lease needs a remote-tracking ref to compare against. Our
-  # --single-branch=develop clone has no ref for $BRANCH, so the lease has
-  # no expected value and git rejects with "stale info" whenever the bot
-  # branch already exists on the remote (e.g. a prior PR was closed without
-  # merging — left the branch behind). Fetch it explicitly. Suppress errors
-  # for the first-ever run case where the remote branch doesn't exist yet.
-  ( cd "$dir" && git fetch --depth 1 "$auth_url" \
-      "$BRANCH:refs/remotes/origin/$BRANCH" --quiet 2>/dev/null || true )
+  # Force-with-lease push, safe against a race where a human touched the
+  # branch. Two subtleties mean we have to compute the lease value ourselves:
+  #
+  #   1. --single-branch=develop clones don't have a remote-tracking ref for
+  #      the bot branch, so the bare --force-with-lease has no expected value.
+  #   2. Bare --force-with-lease only consults refs/remotes/<remote>/<branch>
+  #      when pushing to a configured remote name — pushing to an ad-hoc URL
+  #      (as we do, to embed the App token) bypasses that lookup entirely.
+  #
+  # So: fetch the bot ref, read its sha, and pass it to --force-with-lease
+  # explicitly. Empty lease covers the first-run case where the remote branch
+  # doesn't yet exist (lease then asserts the ref must be absent).
+  local lease_sha=""
+  if ( cd "$dir" && git fetch --depth 1 "$auth_url" \
+        "$BRANCH:refs/remotes/origin/$BRANCH" --quiet 2>/dev/null ); then
+    lease_sha=$( cd "$dir" && git rev-parse "refs/remotes/origin/$BRANCH" 2>/dev/null )
+  fi
 
-  # Force-with-lease push (safe against a race where a human touched the branch)
-  if ! ( cd "$dir" && git push --force-with-lease "$auth_url" "$BRANCH" --quiet ) \
+  if ! ( cd "$dir" && git push "--force-with-lease=$BRANCH:$lease_sha" \
+          "$auth_url" "$BRANCH" --quiet ) \
        2>"$WORK_DIR/${name}.push.err"; then
     err "[$name] push failed"
     sed 's/^/    /' "$WORK_DIR/${name}.push.err" >&2
