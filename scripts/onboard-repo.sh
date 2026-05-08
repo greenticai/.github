@@ -796,6 +796,55 @@ write_workflow() {
 }
 
 # ══════════════════════════════════════════════════════════════════
+# Step 5b: Repo merge settings (allow_auto_merge + delete_branch_on_merge)
+#
+# Required by the nightly cargo-lock-sync bot:
+#   - allow_auto_merge=true so `gh pr merge --auto` can queue the PR to merge
+#     once CI passes, instead of erroring out and leaving PRs stranded.
+#   - delete_branch_on_merge=true so long-lived bot branches are cleaned up
+#     after merge, preventing "stale info" rejections on the next nightly's
+#     --force-with-lease push.
+# ══════════════════════════════════════════════════════════════════
+sync_merge_settings() {
+  log_section "Step 5b: Merge settings"
+
+  if ! command -v gh >/dev/null 2>&1; then
+    log_skip "gh CLI not available — skipping (run enable-automerge-on-targets.sh later)"
+    return
+  fi
+
+  local current
+  if ! current=$(gh api "repos/$ORG/$REPO_NAME" \
+        --jq '[.allow_auto_merge,.delete_branch_on_merge] | @tsv' 2>/dev/null); then
+    log_skip "Could not read repo settings (auth scope?) — skipping"
+    return
+  fi
+
+  local am="${current%$'\t'*}"
+  local db="${current#*$'\t'}"
+
+  if [[ "$am" == "true" && "$db" == "true" ]]; then
+    log_ok "Auto-merge + delete-branch-on-merge already enabled"
+    track_skipped "merge settings (already set)"
+    return
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log_dry "Would set allow_auto_merge=true, delete_branch_on_merge=true (was am=$am db=$db)"
+    return
+  fi
+
+  if gh api -X PATCH "repos/$ORG/$REPO_NAME" \
+      -f allow_auto_merge=true -f delete_branch_on_merge=true --silent 2>/dev/null; then
+    log_update "Enabled auto-merge + delete-branch-on-merge (was am=$am db=$db)"
+    track_updated "merge settings"
+  else
+    log_fail "PATCH failed — check token has admin scope on $ORG/$REPO_NAME"
+    ((failed++)) || true
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════
 # Step 6: cargo fmt (best-effort — skip if cargo unavailable)
 # ══════════════════════════════════════════════════════════════════
 run_fmt() {
@@ -1124,6 +1173,7 @@ sync_config_files
 create_dependabot
 inject_msrv
 create_workflows
+sync_merge_settings
 run_fmt
 
 if [[ "$MODE" == "remote" ]]; then

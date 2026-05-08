@@ -211,6 +211,15 @@ except Exception:
     git commit --quiet -m "chore(nightly): cargo update — $(date -u +%Y-%m-%d)"
   )
 
+  # --force-with-lease needs a remote-tracking ref to compare against. Our
+  # --single-branch=develop clone has no ref for $BRANCH, so the lease has
+  # no expected value and git rejects with "stale info" whenever the bot
+  # branch already exists on the remote (e.g. a prior PR was closed without
+  # merging — left the branch behind). Fetch it explicitly. Suppress errors
+  # for the first-ever run case where the remote branch doesn't exist yet.
+  ( cd "$dir" && git fetch --depth 1 "$auth_url" \
+      "$BRANCH:refs/remotes/origin/$BRANCH" --quiet 2>/dev/null || true )
+
   # Force-with-lease push (safe against a race where a human touched the branch)
   if ! ( cd "$dir" && git push --force-with-lease "$auth_url" "$BRANCH" --quiet ) \
        2>"$WORK_DIR/${name}.push.err"; then
