@@ -51,6 +51,10 @@ on:
         description: "Glob pattern for .wasm files to validate"
         type: string
         default: "target/wasm32-wasip2/release/*.wasm"
+      wasm-target-install:
+        description: "Rust target to install for the wasm job (e.g., wasm32-wasip1, wasm32-wasip2). Must match the target referenced in wasm-check-args / wasm-build-args / wasm-validate-glob."
+        type: string
+        default: "wasm32-wasip2"
       toolchain-variant:
         description: "Canonical toolchain variant (host or wasm) for drift check"
         type: string
@@ -80,3 +84,4 @@ jobs:
       wasm-build-args: ${{ inputs.wasm-build-args }}
       validate-component: ${{ inputs.validate-component }}
       wasm-validate-glob: ${{ inputs.wasm-validate-glob }}
+      wasm-target-install: ${{ inputs.wasm-target-install }}

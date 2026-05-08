@@ -70,6 +70,10 @@ on:
         description: "Glob pattern for .wasm files to validate"
         type: string
         default: "target/wasm32-wasip2/release/*.wasm"
+      wasm-target-install:
+        description: "Rust target to install for the wasm job (e.g., wasm32-wasip1, wasm32-wasip2). Must match the target referenced in wasm-check-args / wasm-build-args / wasm-validate-glob."
+        type: string
+        default: "wasm32-wasip2"
       # ── dependency-review inputs (DEPRECATED no-ops) ────────────────
       # Dependency review moved out of this reusable to avoid the graph-time
       # permission cap issue (see header). These inputs are retained as
@@ -257,7 +261,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
-          targets: wasm32-wasip2
+          targets: ${{ inputs.wasm-target-install }}
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
