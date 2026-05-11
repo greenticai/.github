@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED from greenticai/greentic@c7d26a8 — do not edit directly -->
+<!-- AUTO-GENERATED from greenticai/greentic@0d1911a — do not edit directly -->
 
 # Greentic — The Digital Workers OS
 
@@ -419,13 +419,12 @@ installs companion Greentic tools.
 
 Required local tools and targets:
 
-- `mksquashfs`
 - `cargo-component`
 - `wasm32-wasip2`
 - `cargo-binstall`
 
-If `mksquashfs`, `cargo-component`, or `wasm32-wasip2` are missing, `gtc install`
-tries to install them for the current platform before continuing. If automatic
+If `cargo-component` or `wasm32-wasip2` are missing, `gtc install` tries to
+install them for the current platform before continuing. If automatic
 installation is not available in your environment, install them manually and run
 `gtc install` again.
 
