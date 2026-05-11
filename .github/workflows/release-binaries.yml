@@ -173,7 +173,7 @@ jobs:
               }
             }
           }
-          Compress-Archive -Path "dist/$stem/*" -DestinationPath "dist/$stem.zip" -Force
+          Compress-Archive -Path "dist/$stem" -DestinationPath "dist/$stem.zip" -Force
           Remove-Item -Recurse -Force "dist/$stem"
           $hash = (Get-FileHash "dist/$stem.zip" -Algorithm SHA256).Hash.ToLower()
           Set-Content -Path "dist/$stem.zip.sha256" -Value "$hash  $stem.zip"
