@@ -830,3 +830,11 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
 archived = true
+
+[repos.greentic-dw-canvas-extension]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []
+version-track = { from = "0.4", to = "0.5" }
+weekly-stable-enabled = false
