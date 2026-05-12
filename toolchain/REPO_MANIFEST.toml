@@ -58,7 +58,7 @@ weekly-stable-enabled = true
 [repos.greentic-adaptive-card-mcp]
 org = "greentic-biz"
 variant = "host"
-tier = 0
+tier = 2
 publishes = []  # populate before deploying dev-publish
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
@@ -94,7 +94,7 @@ weekly-stable-enabled = false
 [repos.greentic-designer-extensions]
 org = "greentic-biz"
 variant = "wasm"
-tier = 0
+tier = 1
 publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
 version-track = { from = "0.2", to = "0.3" }
 weekly-stable-enabled = false
@@ -176,7 +176,7 @@ weekly-stable-enabled = true
 [repos.greentic-deployer-extensions]
 org = "greentic-biz"
 variant = "wasm"
-tier = 1
+tier = 2
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
@@ -194,7 +194,7 @@ weekly-stable-enabled = true
 [repos.greentic-provider-extensions]
 org = "greentic-biz"
 variant = "wasm"
-tier = 1
+tier = 2
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
@@ -798,7 +798,7 @@ archived = true
 [repos.greentic-events]
 org = "greenticai"
 variant = "host"
-tier = 4
+tier = 7
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
@@ -807,7 +807,7 @@ archived = true
 [repos.greentic-messaging]
 org = "greenticai"
 variant = "host"
-tier = 4
+tier = 7
 publishes = []
 version-track = { from = "0.4", to = "0.5" }
 weekly-stable-enabled = false
@@ -834,7 +834,7 @@ archived = true
 [repos.greentic-dw-canvas-extension]
 org = "greentic-biz"
 variant = "wasm"
-tier = 8
+tier = 2
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
@@ -842,7 +842,7 @@ weekly-stable-enabled = false
 [repos.greentic-dw-extensions]
 org = "greentic-biz"
 variant = "wasm"
-tier = 8
+tier = 2
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
@@ -850,7 +850,7 @@ weekly-stable-enabled = false
 [repos.greentic-proximity-scheduler]
 org = "greentic-biz"
 variant = "host"
-tier = 8
+tier = 0
 publishes = []  # MVP scaffold; populate before deploying dev-publish
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
@@ -858,7 +858,7 @@ weekly-stable-enabled = false
 [repos.greentic-sorx]
 org = "greenticai"
 variant = "host"
-tier = 7
+tier = 5
 publishes = ["greentic-sorx-core", "greentic-sorx-pack", "greentic-sorx"]
 binary-crates = ["greentic-sorx"]
 dual-role-binary-crates = ["greentic-sorx"]
