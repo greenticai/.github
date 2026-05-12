@@ -838,3 +838,11 @@ tier = 8
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
+
+[repos.greentic-dw-extensions]
+org = "greentic-biz"
+variant = "wasm"
+tier = 8
+publishes = []  # reference-extensions ship via Greentic Store, not crates.io
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
