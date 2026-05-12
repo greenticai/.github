@@ -846,3 +846,11 @@ tier = 8
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
+
+[repos.greentic-proximity-scheduler]
+org = "greentic-biz"
+variant = "host"
+tier = 8
+publishes = []  # MVP scaffold; populate before deploying dev-publish
+version-track = { from = "0.1", to = "0.2" }
+weekly-stable-enabled = false
