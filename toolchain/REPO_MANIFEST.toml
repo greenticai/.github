@@ -854,3 +854,14 @@ tier = 8
 publishes = []  # MVP scaffold; populate before deploying dev-publish
 version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
+
+[repos.greentic-sorx]
+org = "greenticai"
+variant = "host"
+tier = 7
+publishes = ["greentic-sorx-core", "greentic-sorx-pack", "greentic-sorx"]
+binary-crates = ["greentic-sorx"]
+dual-role-binary-crates = ["greentic-sorx"]
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
