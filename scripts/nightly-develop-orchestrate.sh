@@ -18,7 +18,7 @@
 #   easily run >1h (long binary repos in tier 7 alone routinely take 15 min).
 #   Once the seed token expires mid-run, every `gh run view` poll returns
 #   401, wait_for_all interprets that as "still pending", and the tier
-#   stalls until MAX_WAIT (3600s) before being declared a phantom timeout.
+#   stalls until MAX_WAIT (7200s) before being declared a phantom timeout.
 #   Re-minting on demand here means the script is robust to its own length.
 #   It also lets a single script touch both greenticai and greentic-biz
 #   repos (one App, two installations) without the workflow having to
@@ -32,7 +32,7 @@ MANIFEST="toolchain/REPO_MANIFEST.toml"
 WORKFLOW="dev-publish.yml"
 BRANCH="develop"
 POLL_INTERVAL=30    # seconds between status polls
-MAX_WAIT=3600       # max seconds to wait per tier (1 hour)
+MAX_WAIT=7200       # max seconds to wait per tier (2 hours)
 DISPATCH_DETECT=5   # seconds between dispatch detection polls
 DISPATCH_TIMEOUT=24 # max polls to detect dispatched run (24*5s = 2min)
 TOKEN_REFRESH_SEC=2700  # re-mint at 45 min — leaves 15 min headroom on 1h TTL
