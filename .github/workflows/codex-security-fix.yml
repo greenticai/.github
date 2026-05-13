@@ -28,7 +28,11 @@ permissions:
 
 jobs:
   codex-fix:
-    if: github.actor != 'dependabot[bot]'
+    # DISABLED: Codex API integration is broken — the job is short-circuited
+    # here so all caller schedules become no-op skipped runs (no failures,
+    # no Slack noise) without touching ~70 caller workflows. Remove the
+    # `if: false` (restore `github.actor != 'dependabot[bot]'`) to re-enable.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
