@@ -114,7 +114,7 @@ publishes = ["greentic-i18n-lib", "greentic-i18n-translator"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-perf]
 org = "greenticai"
