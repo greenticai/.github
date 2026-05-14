@@ -1,3 +1,8 @@
+# NOTE: file name and workflow `name:` are intentionally kept as "Codex Security
+# Fix" through Phase G of plans/migrate-codex-deepseek.md so that (a) the 67
+# caller `uses:` references stay valid and (b) the Slack mute at
+# notify-failure.yml:59 (`startsWith(workflow-name, 'Codex ')`) keeps firing
+# during the silent pilot. Both will be renamed once the migration is verified.
 name: Codex Security Fix
 
 on:
@@ -15,29 +20,38 @@ on:
         description: "Fetch all repository-wide alerts even on PR trigger"
         type: boolean
         default: false
+      deepseek-model:
+        description: "OpenRouter model ID for remediation. Default: DeepSeek V4 Flash."
+        type: string
+        default: "openrouter/deepseek/deepseek-v4-flash"
     secrets:
-      OPENAI_API_KEY:
-        description: "OpenAI API key for Codex remediation"
+      OPENROUTER_API_KEY:
+        description: "OpenRouter API key for DeepSeek remediation"
         required: false
-      CODEX_OPENAI_API_KEY:
-        description: "Alternative Codex API key"
+      GREENTIC_CI_APP_ID:
+        description: "GitHub App ID for greentic-ci App token minting"
+        required: false
+      GREENTIC_CI_APP_PRIVATE_KEY:
+        description: "GitHub App private key for greentic-ci App token minting"
         required: false
 
 permissions:
   contents: read
 
 jobs:
-  codex-fix:
-    # DISABLED: Codex API integration is broken — the job is short-circuited
-    # here so all caller schedules become no-op skipped runs (no failures,
-    # no Slack noise) without touching ~70 caller workflows. Remove the
-    # `if: false` (restore `github.actor != 'dependabot[bot]'`) to re-enable.
-    if: false
+  # ── Job 1: Detect whether there is remediation work to do ───────────
+  # Runs unconditionally so we know whether to skip the LLM job.
+  # No `if: false` guard — re-enables the pipeline (replacing the disabled
+  # Codex flow). Token cost is gated by job 2 not starting.
+  detect-work:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
       security-events: read
+    outputs:
+      should-fix: ${{ steps.gate.outputs.should-fix }}
+      alert-count: ${{ steps.alerts.outputs.count }}
     steps:
       - name: Mint GitHub App token
         id: app-token
@@ -46,23 +60,7 @@ jobs:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
           private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
 
-      - name: Check Codex availability
-        id: codex_available
-        shell: bash
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_OPENAI_API_KEY:-}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Codex API key is not configured; skipping Codex remediation."
-          fi
-
-      - name: Loop guard – skip if triggered by any Codex remediation commit
+      - name: Loop guard – skip if triggered by any remediation commit
         id: loop_guard
         if: github.event_name == 'pull_request'
         env:
@@ -72,15 +70,17 @@ jobs:
           COMMIT_MSG=$(gh api \
             "/repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" \
             --jq '.commit.message' 2>/dev/null || echo "")
-          if echo "$COMMIT_MSG" | grep -qE "^chore\((security|semver|deps)\): codex remediation"; then
+          # Transitional regex matches both codex (legacy) and deepseek (new)
+          # remediation commits. Narrow to deepseek only after Phase G cleanup.
+          if echo "$COMMIT_MSG" | grep -qE "^chore\((security|semver|deps)\): (codex|deepseek) remediation"; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Head commit is a Codex remediation commit – skipping to prevent loop."
+            echo "Head commit is a remediation commit – skipping to prevent loop."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout code
-        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        if: steps.loop_guard.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
@@ -88,7 +88,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Fetch open security alerts
-        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
+        if: steps.loop_guard.outputs.skip != 'true'
         id: alerts
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -164,8 +164,8 @@ jobs:
           echo "count=${TOTAL_COUNT}" >> "$GITHUB_OUTPUT"
           echo "Found ${DEP_COUNT} open Dependabot alerts and ${CODE_COUNT} open Code Scanning alerts"
 
-      - name: Build Codex prompt
-        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
+      - name: Build remediation prompt
+        if: steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
         env:
           IS_PR: ${{ github.event.pull_request && 'true' || 'false' }}
         run: |
@@ -203,22 +203,114 @@ jobs:
             }]' code-scanning-alerts.json >> codex-prompt.txt
           fi
 
-      - name: Run Codex remediation
-        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
-        uses: openai/codex-action@v1
+      - name: Compute should-fix gate
+        id: gate
+        run: |
+          set -euo pipefail
+          # Loop-guard short-circuit (also catches the case where checkout was skipped).
+          if [ "${{ steps.loop_guard.outputs.skip }}" = "true" ]; then
+            echo "should-fix=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped due to loop guard."
+            exit 0
+          fi
+          # On non-PR triggers (nightly schedule, workflow_dispatch) only engage
+          # the LLM when there's at least one alert. On PRs we engage unconditionally
+          # — the PR diff itself is the unit of work (preserves prior Codex behavior).
+          if [ "${{ steps.alerts.outputs.count }}" = "0" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "should-fix=false" >> "$GITHUB_OUTPUT"
+            echo "No alerts; downstream LLM job will be skipped."
+            exit 0
+          fi
+          echo "should-fix=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload detection artifacts
+        if: steps.gate.outputs.should-fix == 'true'
+        uses: actions/upload-artifact@v7
         with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.CODEX_OPENAI_API_KEY }}
-          prompt-file: codex-prompt.txt
-          codex-args: '["--full-auto"]'
+          name: deepseek-security-detect
+          path: |
+            all-dependabot-alerts.json
+            all-code-scanning-alerts.json
+            dependabot-alerts.json
+            code-scanning-alerts.json
+            pr-code-scanning-filtered.json
+            pr-changed-files.txt
+            security-alerts.json
+            codex-prompt.txt
+          if-no-files-found: warn
+
+  # ── Job 2: DeepSeek (via Goose + OpenRouter) remediation ────────────
+  # Job-level `if:` ensures the runner only spins up when there is actual
+  # work — this is where OpenRouter tokens would otherwise burn.
+  deepseek-fix:
+    needs: detect-work
+    if: needs.detect-work.outputs.should-fix == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      security-events: read
+    steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
+          private-key: ${{ secrets.GREENTIC_CI_APP_PRIVATE_KEY }}
+
+      - name: Check OpenRouter availability
+        id: openrouter_available
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "OPENROUTER_API_KEY is not configured; skipping DeepSeek remediation."
+          fi
+
+      - name: Checkout code
+        if: steps.openrouter_available.outputs.enabled == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Download detection artifacts
+        if: steps.openrouter_available.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: deepseek-security-detect
+
+      - name: Install Goose
+        if: steps.openrouter_available.outputs.enabled == 'true'
+        uses: clouatre-labs/setup-goose-action@7a86bfba08001947997ed330a60215d871f40f8b  # v1.0.8
+        with:
+          version: '1.34.0'
+
+      - name: Run DeepSeek remediation via OpenRouter
+        if: steps.openrouter_available.outputs.enabled == 'true'
+        timeout-minutes: 15
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GOOSE_PROVIDER: openrouter
+          GOOSE_MODEL: ${{ inputs.deepseek-model }}
+          GOOSE_DISABLE_KEYRING: '1'
+        run: |
+          goose run --no-session --instructions codex-prompt.txt
 
       - name: Commit and push fixes
-        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && (steps.alerts.outputs.count != '0' || github.event.pull_request)
+        if: steps.openrouter_available.outputs.enabled == 'true'
         env:
           BRANCH: ${{ github.event.pull_request.head.ref || inputs.branch }}
         run: |
           set -euo pipefail
           if git diff --quiet && [ ! -f SECURITY_FIX_REPORT.md ]; then
-            echo "No changes created by Codex"
+            echo "No changes created by DeepSeek"
             exit 0
           fi
 
@@ -226,11 +318,11 @@ jobs:
           git config user.email "3383573+greentic-ci[bot]@users.noreply.github.com"
 
           git add -u
-          git commit -m "chore(security): codex remediation for security alerts" || echo "No changes to commit"
+          git commit -m "chore(security): deepseek remediation for security alerts" || echo "No changes to commit"
           git push origin "HEAD:${BRANCH}"
 
-      - name: Post Codex Review
-        if: steps.codex_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true' && steps.alerts.outputs.count != '0' && github.event.pull_request
+      - name: Post DeepSeek Review
+        if: steps.openrouter_available.outputs.enabled == 'true' && github.event.pull_request
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -245,7 +337,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: codex-security-run
+          name: deepseek-security-run
           path: |
             all-dependabot-alerts.json
             all-code-scanning-alerts.json
