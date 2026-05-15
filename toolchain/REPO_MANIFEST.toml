@@ -55,7 +55,7 @@ publishes = []
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-adaptive-card-mcp]
 org = "greentic-biz"
@@ -75,7 +75,7 @@ publishes = ["greentic-cap-types", "greentic-cap-profile", "greentic-cap-resolve
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-coding-agent]
 org = "greenticai"
@@ -85,7 +85,7 @@ publishes = []  # internal coding-agent scaffold; all crates set publish = false
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = false
 weekly-stable-enabled = false
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-designer-admin]
 org = "greentic-biz"
@@ -124,7 +124,7 @@ publishes = []  # perf tests, not published
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-sorla-providers]
 org = "greenticai"
@@ -134,7 +134,7 @@ publishes = []  # SoRLa provider family
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-store-server]
 org = "greentic-biz"
@@ -153,7 +153,7 @@ publishes = ["greentic-telemetry"]
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-tenant-manager]
 org = "greentic-biz"
@@ -163,7 +163,7 @@ publishes = []  # commercial workspace, no crates.io publish
 version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = false
 weekly-stable-enabled = false
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-test-types]
 org = "greenticai"
@@ -173,7 +173,7 @@ publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.serde-yaml-gtc]
 org = "greenticai"
@@ -184,7 +184,7 @@ publishes = ["serde_yaml_gtc"]
 # Bump scripts skip repos without version-track.
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 # ─── Tier 1 — Atop tier 0 only (types, dw, ext-bundles, test fixtures) ──────
 
@@ -206,7 +206,7 @@ crates-publish-mode = "embedded"  # crates publish is embedded in release-binari
 version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-provider-extensions]
 org = "greentic-biz"
@@ -225,7 +225,7 @@ publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-test-flow-b]
 org = "greenticai"
@@ -235,7 +235,7 @@ publishes = []  # test fixtures
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 [repos.greentic-types]
 org = "greenticai"
@@ -245,7 +245,7 @@ publishes = ["greentic-types-macros", "greentic-types"]
 version-track = { from = "0.4", to = "0.5" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
-nightly-codex-enabled = false
+nightly-codex-enabled = true
 
 # ─── Tier 2 — Interfaces & config ───────────────────────────────────────────
 
