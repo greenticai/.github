@@ -180,9 +180,11 @@ sync_workflow() {
   mkdir -p "$(dirname "$repo_path/$workflow_path")"
   printf '%s\n' "$expected" > "$repo_path/$workflow_path"
 
-  if ! git -C "$repo_path" diff --quiet -- "$workflow_path" 2>/dev/null; then
-    git -C "$repo_path" add "$workflow_path"
-  fi
+  # Always stage. `git diff --quiet` only sees tracked-file changes, so for
+  # first-time creation (file untracked) it would falsely report "no change"
+  # and skip the add — silently producing an empty commit and no PR. Staging
+  # unconditionally is safe: re-adding an unchanged tracked file is a no-op.
+  git -C "$repo_path" add "$workflow_path"
 }
 
 # Per-repo orchestration: fetch, branch, render both workflows, commit, PR.
