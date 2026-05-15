@@ -497,7 +497,7 @@ weekly-stable-enabled = true
 nightly-codex-enabled = false
 
 [repos.greentic-fast2flow]
-org = "greentic-biz"
+org = "greenticai"
 variant = "wasm"
 tier = 4
 publishes = []  # populate before deploying dev-publish
