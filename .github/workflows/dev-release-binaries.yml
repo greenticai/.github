@@ -101,6 +101,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: dev-release-binaries-${{ matrix.target }}
+          # Don't cache ~/.cargo/bin — these jobs don't `cargo install` anything,
+          # and caching the rustup multi-call shims has poisoned macOS runners after
+          # runner-image refreshes (cargo dispatches as rustup-init installer,
+          # failing with `error: unexpected argument 'build' found`).
+          cache-bin: false
 
       - name: Resolve binary + dev-name
         id: names
