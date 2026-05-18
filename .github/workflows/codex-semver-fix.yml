@@ -27,7 +27,7 @@ on:
       deepseek-model:
         description: "OpenRouter model ID for remediation. Default: DeepSeek V4 Pro (semver edits are structural)."
         type: string
-        default: "openrouter/deepseek/deepseek-v4-pro"
+        default: "deepseek/deepseek-v4-pro"
     secrets:
       OPENROUTER_API_KEY:
         description: "OpenRouter API key for DeepSeek remediation"
@@ -58,6 +58,11 @@ jobs:
     steps:
       - name: Mint GitHub App token
         id: app-token
+        # continue-on-error: App secrets are empty in greentic-biz private repos
+        # (Free-plan org secrets don't propagate to private repos). Steps below
+        # fall back to github.token, which has the per-job permissions block's
+        # scopes (contents/pull-requests).
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
@@ -67,7 +72,7 @@ jobs:
         id: loop_guard
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           COMMIT_MSG=$(gh api \
@@ -88,7 +93,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Setup Rust
         if: steps.loop_guard.outputs.skip != 'true'
@@ -199,6 +204,8 @@ jobs:
     steps:
       - name: Mint GitHub App token
         id: app-token
+        # See detect-work job for the Free-plan rationale.
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
@@ -223,7 +230,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref || inputs.branch }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Download detection artifacts
         if: steps.openrouter_available.outputs.enabled == 'true'
@@ -253,6 +260,7 @@ jobs:
         if: steps.openrouter_available.outputs.enabled == 'true'
         env:
           BRANCH: ${{ github.event.pull_request.head.ref || inputs.branch }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           if git diff --quiet && [ ! -f SEMVER_FIX_REPORT.md ]; then
@@ -264,13 +272,33 @@ jobs:
           git config user.email "3383573+greentic-ci[bot]@users.noreply.github.com"
 
           git add -u
-          git commit -m "chore(semver): deepseek remediation for semver violations" || echo "No changes to commit"
-          git push origin "HEAD:${BRANCH}"
+          if ! git commit -m "chore(semver): deepseek remediation for semver violations"; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          if [ -n "${BRANCH}" ]; then
+            # PR-triggered: push patches back to the PR's head branch so its CI re-runs.
+            git push origin "HEAD:${BRANCH}"
+          else
+            # Scheduled/dispatch with no branch input: open a new remediation PR
+            # against the default branch instead of force-pushing to it.
+            NEW_BRANCH="chore/deepseek-semver-${GITHUB_RUN_ID}"
+            git push origin "HEAD:${NEW_BRANCH}"
+            PR_BODY=$(printf '%s\n\n%s\n' \
+              'Automated remediation from scheduled DeepSeek semver scan.' \
+              "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")
+            gh pr create \
+              --title "chore(semver): deepseek remediation for semver violations" \
+              --body "${PR_BODY}" \
+              --head "${NEW_BRANCH}" \
+              --base "${GITHUB_REF_NAME}"
+          fi
 
       - name: Post DeepSeek Review
         if: steps.openrouter_available.outputs.enabled == 'true' && github.event.pull_request
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
