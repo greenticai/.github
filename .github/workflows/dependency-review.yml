@@ -31,7 +31,7 @@ on:
       deepseek-model:
         description: "OpenRouter model ID for remediation. Default: DeepSeek V4 Flash (dep bumps are simple)."
         type: string
-        default: "openrouter/deepseek/deepseek-v4-flash"
+        default: "deepseek/deepseek-v4-flash"
     secrets:
       OPENROUTER_API_KEY:
         description: "OpenRouter API key for DeepSeek remediation"
@@ -102,6 +102,11 @@ jobs:
     steps:
       - name: Mint GitHub App token
         id: app-token
+        # continue-on-error: App secrets are empty in greentic-biz private repos
+        # (Free-plan org secrets don't propagate to private repos). Steps below
+        # fall back to github.token, which has the per-job permissions block's
+        # scopes (contents/pull-requests).
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.GREENTIC_CI_APP_ID }}
@@ -125,7 +130,7 @@ jobs:
         id: loop_guard
         if: steps.openrouter_available.outputs.enabled == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           COMMIT_MSG=$(gh api \
@@ -146,7 +151,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Build remediation prompt
         if: steps.openrouter_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
@@ -215,7 +220,7 @@ jobs:
       - name: Post DeepSeek Review
         if: steps.openrouter_available.outputs.enabled == 'true' && steps.loop_guard.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
