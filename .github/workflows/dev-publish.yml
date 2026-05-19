@@ -111,6 +111,8 @@ jobs:
         env:
           BASE: ${{ steps.base.outputs.version }}
           DEV_VERSION: ${{ inputs.version }}
+          CRATES: ${{ inputs.crates }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           echo "Stamping version: ${BASE} → ${DEV_VERSION}"
@@ -120,6 +122,23 @@ jobs:
               echo "  stamped ${f}"
             fi
           done
+          # Cover publishable inner crates that don't match BASE — e.g. a
+          # single-package workspace's `crates/<inner>/Cargo.toml` on an
+          # independent version cadence (greentic-deployer +
+          # greentic-deploy-spec). Without this pass, the inner crate keeps
+          # its old version and the publish step's "already exists, skipping"
+          # branch produces a top-level crate that references missing symbols.
+          # See plans/next-gen-deployment.md A4 round-1 follow-up + the
+          # script's module docstring.
+          python3 -m pip install --quiet tomlkit
+          curl -fsSL -o /tmp/stamp-inner-crates.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/stamp-inner-crates.py
+          echo "::group::Stamp inner publishable crates (if any diverge from BASE)"
+          python3 /tmp/stamp-inner-crates.py \
+            --crates "${CRATES}" \
+            --dev-version "${DEV_VERSION}" \
+            --run-id "${RUN_ID}"
+          echo "::endgroup::"
 
       - name: Bifurcate binary crate names
         if: inputs.binary-crates != ''
