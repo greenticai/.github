@@ -54,7 +54,11 @@ _PRE_RELEASE_RE = re.compile(r"^(?P<mmp>\d+\.\d+\.\d+)-dev\.\d+$")
 _REGULAR_RE = re.compile(r"^(?P<mm>\d+\.\d+)\.\d+$")
 
 # Walk excludes — mirror the rest of the .github tooling.
-EXCLUDED_DIR_PARTS = frozenset({"target", ".git", "node_modules", ".venv"})
+# `.packc` holds packc's generated component crate (e.g.
+# greentic-pack/examples/qa-demo/.packc/pack_component) and is gitignored
+# ecosystem-wide; without the exclusion, a committed-by-mistake generator
+# dump (or a local build) shadows the real publishable crate by name.
+EXCLUDED_DIR_PARTS = frozenset({"target", ".git", "node_modules", ".venv", ".packc"})
 
 
 def _find_crate_manifest(root: Path, crate: str) -> Path:

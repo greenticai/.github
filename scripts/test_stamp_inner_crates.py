@@ -260,6 +260,46 @@ def test_empty_crates_input_is_noop() -> None:
         assert "nothing to do" in result.stdout
 
 
+def test_packc_generated_shadow_is_excluded() -> None:
+    """Generator dumps under `.packc/` must not shadow real publishable crates.
+
+    greentic-pack ships `pack_component` at `crates/pack_component/` and
+    `packc build` emits a copy under `examples/<demo>/.packc/pack_component/`.
+    The `.packc/` directory is gitignored; if a copy ever lands in the tree
+    (committed by mistake or left behind by a local build), the walker must
+    skip it. Otherwise the script bails with "expected exactly one Cargo.toml".
+
+    This was the failure mode in
+    https://github.com/greenticai/.github/actions/runs/26144643272.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        real = root / "crates" / "pack_component" / "Cargo.toml"
+        shadow = root / "examples" / "qa-demo" / ".packc" / "pack_component" / "Cargo.toml"
+        _write(
+            real,
+            """[package]
+name = "pack_component"
+version = "0.1.0"
+edition = "2024"
+""",
+        )
+        _write(
+            shadow,
+            f"""[package]
+name = "pack_component"
+version = "{DEV_VERSION}"
+edition = "2024"
+""",
+        )
+        result = _run(root, "pack_component")
+        assert result.returncode == 0, result.stdout + result.stderr
+        # Only the real manifest should have been touched.
+        assert _read_version(real) == f"0.1.{RUN_ID}"
+        # Shadow must be left untouched (still on the pre-walk value).
+        assert _read_version(shadow) == DEV_VERSION
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -274,6 +314,7 @@ def main() -> None:
         test_unsupported_version_form_errors,
         test_format_preserved_under_stamp,
         test_empty_crates_input_is_noop,
+        test_packc_generated_shadow_is_excluded,
     ]
     failed = 0
     for test in tests:
