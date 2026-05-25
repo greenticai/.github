@@ -306,6 +306,13 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GOOSE_PROVIDER: openrouter
           GOOSE_MODEL: ${{ inputs.deepseek-model }}
+          # Pin the auxiliary "fast model" to DeepSeek too. Goose otherwise
+          # hardcodes google/gemini-2.5-flash for tool-selection/classification
+          # calls, which bled OpenRouter spend independent of GOOSE_MODEL.
+          # Honored by ModelConfig::with_fast as of aaif-goose/goose#9296 — INERT
+          # on the pinned 1.34.0; takes effect once goose-version is bumped to a
+          # release containing that change (post-v1.35.0).
+          GOOSE_FAST_MODEL: deepseek/deepseek-v4-flash
           GOOSE_DISABLE_KEYRING: '1'
         run: |
           goose run --no-session --instructions codex-prompt.txt
