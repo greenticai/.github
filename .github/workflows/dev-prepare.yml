@@ -77,6 +77,18 @@ jobs:
     if: inputs.run-tests
     runs-on: ubuntu-latest
     steps:
+      # ubuntu-latest ships with ~14 GiB free; a full workspace clippy +
+      # build + test against wasmtime/tokio with --all-features exhausts it
+      # (rustc-LLVM "No space left on device" mid-link). Reclaim the large
+      # preinstalled toolchains the Rust build never touches. CodeQL is left
+      # in place — fleet repos run codeql.yml on their own runners.
+      - name: Free runner disk space
+        run: |
+          echo "Before:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc /usr/local/.ghcup || true
+          sudo rm -rf /usr/share/dotnet || true
+          echo "After:"; df -h /
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
