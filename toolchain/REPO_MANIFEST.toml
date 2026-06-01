@@ -341,6 +341,16 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
 
+[repos.component-slot-extractor]
+org = "greenticai"
+variant = "wasm"
+tier = 3
+publishes = []
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+nightly-codex-enabled = false
+
 [repos.components-public]
 org = "greenticai"
 variant = "wasm"
