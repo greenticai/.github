@@ -963,5 +963,5 @@ org = "greenticai"
 variant = "host"
 tier = 7
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
 weekly-stable-enabled = false
