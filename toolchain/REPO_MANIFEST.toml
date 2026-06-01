@@ -962,6 +962,9 @@ nightly-codex-enabled = false
 org = "greenticai"
 variant = "host"
 tier = 7
-publishes = []
-version-track = { from = "0.4", to = "0.5" }
-weekly-stable-enabled = false
+publishes = ["greentic-operala"]
+binary-crates = ["greentic-operala"]
+dual-role-binary-crates = ["greentic-operala"]
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
