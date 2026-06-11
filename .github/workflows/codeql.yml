@@ -31,6 +31,10 @@ on:
         description: "host or wasm — controls wasm32-wasip2 target install"
         type: string
         default: "host"
+      runner:
+        description: "Linux runner label. Must be x86_64 (e.g. blacksmith-4vcpu-ubuntu-2404) — the CodeQL bundle ships no Linux ARM binaries."
+        type: string
+        default: "ubuntu-latest"
 
 permissions:
   security-events: write
@@ -39,7 +43,7 @@ permissions:
 
 jobs:
   analyze:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

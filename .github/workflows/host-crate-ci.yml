@@ -48,6 +48,10 @@ on:
         description: "Checkout git submodules (false, true, or recursive)"
         type: string
         default: "false"
+      runner:
+        description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
+        type: string
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
@@ -68,6 +72,7 @@ jobs:
       setup-script: ${{ inputs.setup-script }}
       toolchain-variant: ${{ inputs.toolchain-variant }}
       checkout-submodules: ${{ inputs.checkout-submodules }}
+      runner: ${{ inputs.runner }}
 
   semver-checks:
     # Advisory mode: reports breaking changes as warnings, never fails the job.
@@ -79,7 +84,7 @@ jobs:
     # The real semver gate lives in weekly-stable-prepare, which compares
     # against the last v* tag at publish boundary.
     if: ${{ inputs.run-semver-checks }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
