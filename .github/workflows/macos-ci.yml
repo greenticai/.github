@@ -1,0 +1,63 @@
+name: macOS CI
+
+# Gated macOS validation leg. macOS runners bill at ~10x the Linux rate on
+# private repos, so the fleet policy is: macOS CI runs ONLY on pull requests
+# targeting main, on release tags, or on manual dispatch — never on per-push
+# CI. Callers should already restrict their triggers (pull_request:
+# branches: [main] + workflow_dispatch); the job-level guard below enforces
+# the policy even if a caller wires broader triggers.
+#
+# Scope: test/validation leg only. fmt/clippy/web checks are platform-
+# independent and stay on the Linux baseline (pr-ci.yml); tag-gated
+# release-binary builds keep their own per-repo publish workflows.
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      test-args:
+        description: "Arguments passed to cargo test"
+        type: string
+        default: "--workspace"
+      runner:
+        description: "macOS runner label"
+        type: string
+        default: "macos-latest"
+      setup-script:
+        description: "Optional shell commands to run before checks"
+        type: string
+        default: ""
+      checkout-submodules:
+        description: "Checkout git submodules (false, true, or recursive)"
+        type: string
+        default: "false"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos-test:
+    # Policy guard: PRs targeting main, release tags, or manual dispatch only.
+    # github context is the caller's, so this holds for workflow_call too.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main')
+      || startsWith(github.ref, 'refs/tags/')
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.checkout-submodules }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
+      - if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+      - run: cargo test ${{ inputs.test-args }}
