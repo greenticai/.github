@@ -55,6 +55,10 @@ on:
         description: "Canonical toolchain variant (host or wasm) for drift check"
         type: string
         default: "wasm"
+      runner:
+        description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
+        type: string
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
@@ -80,3 +84,4 @@ jobs:
       wasm-build-args: ${{ inputs.wasm-build-args }}
       validate-component: ${{ inputs.validate-component }}
       wasm-validate-glob: ${{ inputs.wasm-validate-glob }}
+      runner: ${{ inputs.runner }}

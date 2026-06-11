@@ -45,6 +45,10 @@ on:
         description: "Canonical toolchain variant for drift check (host or wasm)"
         type: string
         default: ""
+      runner:
+        description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
+        type: string
+        default: "ubuntu-latest"
       # ── wasm-only inputs ────────────────────────────────────────────
       use-cargo-component:
         description: "Use 'cargo component build' instead of 'cargo build' (wasm only)"
@@ -112,7 +116,7 @@ jobs:
   # accidental forward-port, shipping a broken patch lane to every consumer.
   main-pre-release-guard:
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -141,7 +145,7 @@ jobs:
           echo "✓ No pre-release version suffixes in Cargo.toml files"
 
   toolchain-check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -176,7 +180,7 @@ jobs:
           : "${DRIFT}"
 
   fmt:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -190,7 +194,7 @@ jobs:
       - run: cargo fmt --all -- --check
 
   clippy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -220,7 +224,7 @@ jobs:
       - run: cargo clippy ${{ steps.clippy_args.outputs.args }}
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -249,7 +253,7 @@ jobs:
 
   wasm:
     if: inputs.variant == 'wasm'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:

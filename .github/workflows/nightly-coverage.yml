@@ -59,6 +59,10 @@ on:
         description: "Job timeout in minutes"
         type: number
         default: 60
+      runner:
+        description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
+        type: string
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
@@ -74,7 +78,7 @@ jobs:
   # contained (avoids cross-repo `@main` resolution problems when the
   # action lives in the same repo as the reusable that references it).
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     outputs:
       should-run: ${{ steps.gate.outputs.should-run }}
     steps:
@@ -133,7 +137,7 @@ jobs:
   coverage:
     needs: gate
     if: needs.gate.outputs.should-run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@v6

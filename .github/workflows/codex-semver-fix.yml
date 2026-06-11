@@ -28,6 +28,10 @@ on:
         description: "OpenRouter model ID for remediation. Default: DeepSeek V4 Pro (semver edits are structural)."
         type: string
         default: "deepseek/deepseek-v4-pro"
+      runner:
+        description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
+        type: string
+        default: "ubuntu-latest"
     secrets:
       OPENROUTER_API_KEY:
         description: "OpenRouter API key for DeepSeek remediation"
@@ -48,7 +52,7 @@ jobs:
   # No `if: false` guard — re-enables the pipeline (replacing the disabled
   # Codex flow). Token cost is gated by job 2 not starting.
   detect-work:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       pull-requests: read
@@ -197,7 +201,7 @@ jobs:
   deepseek-fix:
     needs: detect-work
     if: needs.detect-work.outputs.should-fix == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
       pull-requests: write
