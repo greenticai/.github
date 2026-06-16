@@ -116,6 +116,16 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
 
+[repos.greentic-llm]
+org = "greenticai"
+variant = "host"
+tier = 0
+publishes = ["greentic-llm"]
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = true
+weekly-stable-enabled = true
+nightly-codex-enabled = false
+
 [repos.greentic-perf]
 org = "greenticai"
 variant = "host"
