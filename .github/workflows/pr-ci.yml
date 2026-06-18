@@ -199,6 +199,24 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
+      - name: Free disk space
+        shell: bash
+        run: |
+          # Reclaim ~12-15 GB of preinstalled tooling the Rust build never uses
+          # (dotnet, Haskell, CodeQL, Android, boost). A --workspace
+          # --all-features clippy/test build of a large workspace (e.g.
+          # greentic-deployer) otherwise exhausts the GitHub-hosted runner disk
+          # mid-run; the runner is killed before it can even upload logs, which
+          # surfaces as an unexplained, intermittent job failure. Best-effort:
+          # no-ops on runners lacking these paths or passwordless sudo.
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android \
+            /usr/local/share/boost 2>/dev/null || true
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
@@ -229,6 +247,24 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: ${{ inputs.checkout-submodules }}
+      - name: Free disk space
+        shell: bash
+        run: |
+          # Reclaim ~12-15 GB of preinstalled tooling the Rust build never uses
+          # (dotnet, Haskell, CodeQL, Android, boost). A --workspace
+          # --all-features clippy/test build of a large workspace (e.g.
+          # greentic-deployer) otherwise exhausts the GitHub-hosted runner disk
+          # mid-run; the runner is killed before it can even upload logs, which
+          # surfaces as an unexplained, intermittent job failure. Best-effort:
+          # no-ops on runners lacking these paths or passwordless sudo.
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android \
+            /usr/local/share/boost 2>/dev/null || true
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ inputs.rust-version }}
