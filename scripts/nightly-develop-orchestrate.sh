@@ -136,8 +136,12 @@ declare -a failure_lines=()
 # ── Helpers ──────────────────────────────────────────────────────
 
 log()  { echo "$1"; }
-err()  { echo "::error::$1"; }
-warn() { echo "::warning::$1"; }
+# Errors/warnings go to stderr so they survive command substitution. dispatch()
+# is called as `run_id=$(dispatch ...)`, which captures its stdout — emitting an
+# `err`/`warn` there on stdout would be swallowed into the discarded run_id and
+# never reach the log. GitHub still parses `::error::`/`::warning::` from stderr.
+err()  { echo "::error::$1" >&2; }
+warn() { echo "::warning::$1" >&2; }
 
 record_failure() {
   local repo="$1"
