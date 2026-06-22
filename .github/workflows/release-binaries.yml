@@ -46,6 +46,11 @@ on:
         required: false
         type: boolean
         default: true
+      include-macos-intel:
+        description: "Also build the Intel macOS binary (x86_64-apple-darwin on macos-15-intel). OFF by default to save Actions cost; pass true for a final all-binary release."
+        required: false
+        type: boolean
+        default: false
     secrets:
       GHCR_TOKEN:
         description: "Optional PAT for GHCR push; falls back to GITHUB_TOKEN"
@@ -56,31 +61,44 @@ permissions:
   packages: write
 
 jobs:
+  # The Intel macOS leg (x86_64-apple-darwin on macos-15-intel — bills ~10x
+  # Linux) is OFF by default; most consumers are on Apple Silicon. Callers pass
+  # `include-macos-intel: true` for a final all-binary release. Every other
+  # target always builds.
+  resolve-matrix:
+    name: resolve build matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Resolve target matrix
+        id: matrix
+        shell: bash
+        env:
+          INCLUDE_INTEL: ${{ inputs.include-macos-intel }}
+        run: |
+          set -euo pipefail
+          targets='[
+            {"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","os":"linux"},
+            {"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu","os":"linux"},
+            {"runner":"macos-15","target":"aarch64-apple-darwin","os":"macos"},
+            {"runner":"windows-2022","target":"x86_64-pc-windows-msvc","os":"windows"},
+            {"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","os":"windows"}
+          ]'
+          if [ "$INCLUDE_INTEL" = "true" ]; then
+            targets="$(printf '%s' "$targets" | jq -c '. + [{"runner":"macos-15-intel","target":"x86_64-apple-darwin","os":"macos"}]')"
+          else
+            targets="$(printf '%s' "$targets" | jq -c '.')"
+          fi
+          echo "matrix={\"include\":${targets}}" >> "$GITHUB_OUTPUT"
+
   build-binaries:
     name: build-${{ matrix.target }}
+    needs: resolve-matrix
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            os: linux
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            os: linux
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            os: macos
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            os: macos
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            os: windows
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            os: windows
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
