@@ -40,6 +40,28 @@ jobs:
         id: version
         uses: greenticai/.github/.github/actions/extract-cargo-version@main
 
+      - name: Guard against dev-lane versions
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The stable crates-publish lane must never publish a `-dev.*`
+          # pre-release. Those versions are owned exclusively by the nightly
+          # dev-publish lane (dev-publish.yml) on `develop`, and they fall
+          # inside every consumer's `>=M.m.0-dev..., <M.(m+1).0-0` range.
+          # A manual workflow_dispatch of this workflow from a research/feature
+          # branch carrying a hand-edited `-dev.*` version leaks a foreign
+          # source tree into the shared dev namespace and breaks downstream
+          # resolution (the 2026-06-19 greentic-types 1.1.0-dev.27836473437
+          # incident: research-branch tree, no provider_id, out-sorted the
+          # legit develop publish and poisoned greentic-secrets' lock).
+          if [[ "${VERSION}" == *-dev.* || "${VERSION}" == *-dev ]]; then
+            echo "::error::Refusing to publish dev-lane version '${VERSION}' on the stable crates-publish lane."
+            echo "::error::'-dev.*' versions belong to dev-publish.yml on develop. To publish from a research/feature branch, use a non-dev pre-release namespace (e.g. 'M.m.p-research.N') that consumers exclude via '<M.(m+1).0-0'."
+            exit 1
+          fi
+          echo "Version '${VERSION}' is not a dev-lane pre-release — OK for stable publish."
+
       - name: Log inputs
         run: |
           echo "Version: ${{ steps.version.outputs.version }}"
