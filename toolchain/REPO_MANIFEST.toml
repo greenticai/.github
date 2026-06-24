@@ -62,7 +62,7 @@ org = "greentic-biz"
 variant = "host"
 tier = 2
 publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -92,7 +92,7 @@ org = "greentic-biz"
 variant = "host"
 tier = 0
 publishes = []  # service binary with embedded React SPA — not a crates.io crate
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = false
 weekly-stable-enabled = false
 nightly-codex-enabled = false
@@ -102,7 +102,7 @@ org = "greentic-biz"
 variant = "wasm"
 tier = 1
 publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
-version-track = { from = "0.2", to = "0.3" }
+version-track = { from = "1.2", to = "1.3" }
 weekly-stable-enabled = false
 nightly-codex-enabled = false
 
@@ -111,7 +111,7 @@ org = "greenticai"
 variant = "host"
 tier = 0
 publishes = ["greentic-i18n-lib", "greentic-i18n-translator"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
@@ -141,7 +141,7 @@ org = "greenticai"
 variant = "host"
 tier = 0
 publishes = []  # SoRLa provider family
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
@@ -151,7 +151,7 @@ org = "greentic-biz"
 variant = "host"
 tier = 0
 publishes = []  # service binary, deployed via Docker — not a crates.io crate
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.1", to = "1.2" }
 weekly-stable-enabled = false
 nightly-codex-enabled = false
 
@@ -170,7 +170,7 @@ org = "greentic-biz"
 variant = "host"
 tier = 0
 publishes = []  # commercial workspace, no crates.io publish
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = false
 weekly-stable-enabled = false
 nightly-codex-enabled = true
@@ -203,7 +203,7 @@ org = "greentic-biz"
 variant = "wasm"
 tier = 2
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.2", to = "1.3" }
 weekly-stable-enabled = false
 nightly-codex-enabled = false
 
@@ -213,7 +213,7 @@ variant = "host"
 tier = 1
 publishes = ["greentic-dw-context", "greentic-dw-delegation", "greentic-dw-planning", "greentic-dw-reflection", "greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-workspace", "greentic-dw-runtime", "greentic-dw-cli"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
-version-track = { from = "0.5", to = "0.6" }
+version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
@@ -223,7 +223,7 @@ org = "greentic-biz"
 variant = "wasm"
 tier = 2
 publishes = []  # reference-extensions ship via Greentic Store, not crates.io
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.2", to = "1.3" }
 weekly-stable-enabled = false
 nightly-codex-enabled = false
 
@@ -252,7 +252,7 @@ org = "greenticai"
 variant = "host"
 tier = 1
 publishes = ["greentic-types-macros", "greentic-types"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
@@ -284,7 +284,7 @@ org = "greenticai"
 variant = "host"
 tier = 2
 publishes = ["greentic-interfaces", "greentic-interfaces-guest", "greentic-interfaces-wasmtime", "greentic-interfaces-host"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -296,7 +296,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 3
 publishes = []
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -366,7 +366,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 3
 publishes = []
-version-track = { from = "0.1", to = "0.2" }
+version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -521,7 +521,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 4
 publishes = []  # populate before deploying dev-publish
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -557,7 +557,7 @@ publishes = ["greentic-sorla-lang", "greentic-sorla-ir", "greentic-sorla-pack", 
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-sorla"]
 dual-role-binary-crates = ["greentic-sorla"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -572,7 +572,7 @@ publishes = ["bundle-standard-core", "cards2pack-core", "greentic-bundle-reader"
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-bundle"]
 dual-role-binary-crates = ["greentic-bundle"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.7", to = "0.8" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -584,7 +584,7 @@ tier = 5
 publishes = ["greentic-component-manifest", "greentic-component-store", "greentic-component-runtime", "greentic-component"]
 binary-crates = ["greentic-component"]
 dual-role-binary-crates = ["greentic-component"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -597,7 +597,7 @@ publishes = ["greentic-deploy-spec", "greentic-operator-trust", "greentic-deploy
 crates-publish-mode = "embedded"  # crates publish is embedded in release.yml (gated on publish-version-release)
 binary-crates = ["greentic-deployer"]
 dual-role-binary-crates = ["greentic-deployer"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -610,7 +610,7 @@ publishes = ["greentic-flow"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-flow"]
 dual-role-binary-crates = ["greentic-flow"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -646,7 +646,7 @@ publishes = ["greentic-setup"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-setup"]
 dual-role-binary-crates = ["greentic-setup"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.7", to = "0.8" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -691,7 +691,7 @@ variant = "host"
 tier = 6
 publishes = ["greentic-cards2pack"]
 setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow --force"
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -728,7 +728,7 @@ org = "greentic-biz"
 variant = "host"
 tier = 7
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -742,7 +742,7 @@ crates-publish-mode = "embedded"  # crates publish is embedded in release-binari
 binary-crates = ["greentic-dev"]
 dual-role-binary-crates = ["greentic-dev"]
 setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo install cargo-binstall --locked; fi && cargo binstall -y greentic-flow greentic-component greentic-pack --force"
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "0.5", to = "0.6" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -752,7 +752,7 @@ org = "greenticai"
 variant = "host"
 tier = 7
 publishes = []  # WASM provider components
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -766,7 +766,7 @@ crates-publish-mode = "embedded"  # crates publish is embedded in release-binari
 binary-crates = ["greentic-runner"]
 dual-role-binary-crates = ["greentic-runner"]
 exclude-crates = ["echo-secret", "component-v0-6-dummy"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -798,7 +798,7 @@ org = "greenticai"
 variant = "wasm"
 tier = 8
 publishes = []  # WASM provider components
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -835,7 +835,7 @@ publishes = ["greentic-start"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-start"]
 dual-role-binary-crates = ["greentic-start"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.2", to = "1.3" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -860,7 +860,7 @@ org = "greenticai"
 variant = "host"
 tier = 9
 publishes = []  # demo bundles, not published
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
