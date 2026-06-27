@@ -7,12 +7,15 @@ name: Rnd Publish
 # is pre-computed by rnd-prepare.yml (verbatim X.Y.Z-research) and passed in via
 # `version`.
 #
-# For binary-crates this workflow runs the rewrite-binary-name.py bifurcation so
-# the crate lands on crates.io as `<crate>-rnd` (or as both `<crate>` library +
-# `<crate>-rnd` binary for dual-role crates). The research version is a semver
-# pre-release, so `cargo binstall <crate>-rnd` requires `--version
-# <X.Y.Z-research>` (gtc-research pins it from the toolchain manifest) — unlike
-# the dev lane, the binary version is NOT regularized.
+# For binary-crates this workflow publishes a dependency-free binstall SHIM
+# (make-binstall-shim.py) as `<crate>-rnd` — the real research binary crate
+# can't reach crates.io (git deps + a publish=false greentic-aw-runtime), so
+# renaming it (rewrite-binary-name.py) would still fail to publish. The shim
+# carries only [package.metadata.binstall] → the GitHub-release archive. The
+# research version is a semver pre-release, so `cargo binstall <crate>-rnd`
+# requires `--version <X.Y.Z-research>` (greentic-dev#206 pins it); the binary
+# version is NOT regularized. Dual-role crates also publish their real library
+# under `<crate>`. See RND_LANE.md (showstopper #1 / Option A).
 #
 # Caller pattern (emitted by sync-rnd-publish.sh):
 #
@@ -141,30 +144,33 @@ jobs:
             --run-id "${RUN_ID}"
           echo "::endgroup::"
 
-      - name: Bifurcate binary crate names
+      - name: Generate binstall shim crates
         if: inputs.binary-crates != ''
         env:
           BINARY_CRATES: ${{ inputs.binary-crates }}
-          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          # Install tomli_w (the script uses it to write the copy's Cargo.toml
-          # with workspace inheritance resolved). pip is pre-installed on the
-          # GitHub runner; tomli_w is a tiny pure-python package.
-          python3 -m pip install --quiet tomli-w
-          curl -fsSL -o /tmp/rewrite-binary-name.py \
-            https://raw.githubusercontent.com/greenticai/.github/main/scripts/rewrite-binary-name.py
+          # Showstopper #1 (RND_LANE.md): the research binaries (greentic-start,
+          # …) get multi-provider dw.agent via git deps + a `publish = false`
+          # greentic-aw-runtime, so `cargo publish` can NEVER publish the real
+          # crate (crates.io rejects git deps / can't resolve publish=false).
+          # rewrite-binary-name.py only RENAMES the real crate, keeping its
+          # deps — so the rename publishes would fail too.
+          #
+          # Instead, publish a dependency-free SHIM (`<crate>-rnd`) carrying only
+          # [package.metadata.binstall] → the GitHub-release archive that
+          # rnd-release-binaries.yml already built. `cargo binstall <crate>-rnd
+          # --version <v>` resolves that metadata and downloads the real binary;
+          # the published source is never run. Shim is published at the
+          # pre-release research version (install passes --version, greentic-dev#206).
+          curl -fsSL -o /tmp/make-binstall-shim.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/make-binstall-shim.py
           for crate in $BINARY_CRATES; do
-            dr_flag=""
-            for dr in $DUAL_ROLE; do
-              if [ "$dr" = "$crate" ]; then
-                dr_flag="--dual-role"
-                break
-              fi
-            done
-            echo "::group::Bifurcate $crate ($dr_flag)"
-            python3 /tmp/rewrite-binary-name.py \
-              --crate "$crate" --suffix rnd --workdir . $dr_flag
+            echo "::group::Generate binstall shim for ${crate}-rnd"
+            python3 /tmp/make-binstall-shim.py \
+              --crate "$crate" --suffix rnd --version "$VERSION" \
+              --workdir . --out target/shim
             echo "::endgroup::"
           done
 
@@ -195,12 +201,14 @@ jobs:
           > /tmp/publish-list.txt
           for crate in "${crates_arr[@]}"; do
             if is_in "$crate" "${bins_arr[@]}"; then
+              # Binary crates publish from their generated binstall SHIM
+              # (target/shim/<crate>-rnd/Cargo.toml) — never the real crate,
+              # which can't reach crates.io (git deps / publish=false). A
+              # dual-role crate ALSO publishes its real library under <crate>.
               if is_in "$crate" "${dual_arr[@]}"; then
                 printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
-                printf 'manifest\ttarget/bifurcate/%s-rnd/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
-              else
-                printf 'pkg\t%s-rnd\n' "$crate" >> /tmp/publish-list.txt
               fi
+              printf 'manifest\ttarget/shim/%s-rnd/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
             else
               printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
             fi

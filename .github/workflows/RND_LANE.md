@@ -19,14 +19,17 @@ installs. The `rnd` lane closes that gap.
 |----------|----------|------------|
 | `dev-prepare.yml` | `rnd-prepare.yml` | version comes **verbatim from Cargo.toml `X.Y.Z-research`** (no `RUN_ID` stamping); validates the `-research` suffix |
 | `dev-release-binaries.yml` | `rnd-release-binaries.yml` | binary renamed to `<crate>-rnd`; archive `<crate>-rnd-v{version}-{target}`; release tagged `v<version>` |
-| `dev-publish.yml` | `rnd-publish.yml` | bifurcates `<crate>` → `<crate>-rnd` and `cargo publish`es it at the `-research` version |
+| `dev-publish.yml` | `rnd-publish.yml` | publishes a **dependency-free binstall shim** `<crate>-rnd` (`make-binstall-shim.py`) at the `-research` version — the real research binary can't be published (git deps + `publish=false` `aw-runtime`) |
 
-Pairing: `rnd-publish` publishes the `<crate>-rnd` crate (metadata + binstall
-pkg-url) → `rnd-release-binaries` uploads the matching archive → `cargo binstall
-<crate>-rnd --version <X.Y.Z-research>` resolves and downloads it. The
-`--version` is required because the research version is a semver pre-release
-(gtc-research pins it from the toolchain manifest) — this is the one deliberate
-divergence from the dev lane, which regularizes its binary version.
+Pairing: `rnd-publish` publishes the `<crate>-rnd` **shim** (a dependency-free
+crate carrying only `[package.metadata.binstall]`) → `rnd-release-binaries`
+uploads the matching archive → `cargo binstall <crate>-rnd --version
+<X.Y.Z-research>` resolves the shim's metadata and downloads the real binary
+from the release. The `--version` is required because the research version is a
+semver pre-release (greentic-dev#206 pins it) — this is the one deliberate
+divergence from the dev lane, which regularizes its binary version. The shim is
+needed (vs the dev lane's `rewrite-binary-name.py` rename) because the research
+binary's dependency graph (git deps + `publish=false`) cannot be published.
 
 ## Caller (per repo, emitted by the sync script — see "open items")
 
@@ -70,13 +73,23 @@ jobs:
 
 ## Resolved in this PR
 
+- **Showstopper #1 — research binaries can't be real-published (Option A, shim).**
+  `greentic-start@research` resolves multi-provider `dw.agent` through git deps +
+  a `publish=false` `greentic-aw-runtime`; `cargo publish` rejects both, and
+  `rewrite-binary-name.py` only renames the real crate (deps intact), so it can't
+  publish either. `rnd-publish.yml` now generates and publishes a
+  **dependency-free shim** (`scripts/make-binstall-shim.py` → `<crate>-rnd`
+  carrying only `[package.metadata.binstall]` → the GH-release archive).
+  Verified locally: the generated shim `cargo publish --dry-run`s clean.
 - **binstall on a pre-release version.** Decided: keep the verbatim
   `X.Y.Z-research` (a semver pre-release) for the `<crate>-rnd` binary. It sorts
   below stable on crates.io and `cargo binstall <crate>-rnd` requires
-  `--version`, which `gtc-research install` already pins from the toolchain
-  manifest. The dev lane's binary-version regularization is intentionally NOT
-  carried over — it collides with the verbatim-version, no-`RUN_ID` scheme
-  (a regular `X.Y.Z` would clash across `-research.0/.1/.2` bumps).
+  `--version`. The install side did NOT pass `--version` (the review's
+  showstopper #2) — now implemented in **greentic-dev#206**
+  (`install_all_delegated_tools` resolves + pins the research version per crate
+  for the `Rnd` channel). The dev lane's binary-version regularization is
+  intentionally NOT carried over — it collides with the verbatim-version,
+  no-`RUN_ID` scheme (a regular `X.Y.Z` would clash across `-research.0/.1/.2`).
 - **Residual dev-isms.** Bifurcation now uses `--suffix rnd`, so the crate
   actually publishes as `<crate>-rnd` (was `<crate>-dev`, which both targeted the
   wrong name and mismatched the `-rnd` archives). The dead `binary-version`
