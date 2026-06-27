@@ -1,0 +1,167 @@
+name: Rnd Prepare
+
+# Reusable workflow that runs fmt/clippy/build/test for the research lane
+# and computes the stamped dev version `{M.m.GITHUB_RUN_ID}`. The version
+# output is consumed by dev-release-binaries.yml (to build + name archives)
+# and dev-publish.yml (to stamp Cargo.toml before cargo publish).
+#
+# This runs FIRST in the rnd (research) lane so that dev-publish.yml (which actually
+# pushes to crates.io) can be ordered AFTER dev-release-binaries.yml. If
+# a binary build fails, cargo publish never runs — no orphan crate version
+# left on crates.io without matching binaries.
+#
+# Caller pattern (emitted by sync-dev-publish.sh):
+#
+#   jobs:
+#     dev-prepare:
+#       uses: greenticai/.github/.github/workflows/dev-prepare.yml@main
+#       secrets: inherit
+#     dev-binaries-<pkg>:
+#       needs: dev-prepare
+#       uses: greenticai/.github/.github/workflows/dev-release-binaries.yml@main
+#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#     dev-publish:
+#       needs: [dev-prepare, dev-binaries-<pkg>]
+#       uses: greenticai/.github/.github/workflows/dev-publish.yml@main
+#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      run-tests:
+        description: "Run fmt/clippy/build/test before exporting version"
+        type: boolean
+        default: true
+      setup-script:
+        description: "Optional shell commands to run before build (e.g., ci/setup.sh)"
+        type: string
+        default: ""
+      wasm-target:
+        description: "Add wasm32-wasip2 target for WASM component repos"
+        type: boolean
+        default: false
+      exclude-crates:
+        description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
+        type: string
+        default: ""
+      require-pre-release:
+        description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: "Stamped LIBRARY version (alias retained for backward compatibility — equals `lib-version`). Form depends on Cargo.toml base: `M.m.p-dev.{GITHUB_RUN_ID}` if base is pre-release `M.m.p-dev.N` (preferred for binary-bifurcated repos — sorts below stable on crates.io), else `{major}.{minor}.{GITHUB_RUN_ID}` regular release. Used to stamp the workspace and publish library crates under `<name>`."
+        value: ${{ jobs.compute-version.outputs.version }}
+      lib-version:
+        description: "Explicit alias of `version` — the LIBRARY version. Used to stamp Cargo.toml across the workspace. For binary-bifurcated dual-role repos, this is intentionally pre-release so dev publishes of `<name>` libraries don't preempt stable on crates.io."
+        value: ${{ jobs.compute-version.outputs.version }}
+      binary-version:
+        description: "Stamped BINARY version (regular release `{major}.{minor}.{GITHUB_RUN_ID}`). Used by binary-bifurcated repos for the `<name>-rnd` crates.io publish + binstall archive naming. Regular release (not pre-release) so `cargo binstall <name>-rnd` resolves without `--version` flags. For repos on a regular-release Cargo.toml base, this equals `lib-version`."
+        value: ${{ jobs.compute-version.outputs.binary }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-test:
+    name: CI (fmt / clippy / build / test)
+    if: inputs.run-tests
+    runs-on: ubuntu-latest
+    steps:
+      # ubuntu-latest ships with ~14 GiB free; a full workspace clippy +
+      # build + test against wasmtime/tokio with --all-features exhausts it
+      # (rustc-LLVM "No space left on device" mid-link). Reclaim the large
+      # preinstalled toolchains the Rust build never touches. CodeQL is left
+      # in place — fleet repos run codeql.yml on their own runners.
+      - name: Free runner disk space
+        run: |
+          echo "Before:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc /usr/local/.ghcup || true
+          sudo rm -rf /usr/share/dotnet || true
+          echo "After:"; df -h /
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: rustfmt, clippy
+          targets: ${{ inputs.wasm-target && 'wasm32-wasip2' || '' }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo clippy --workspace --all-targets --all-features $excludes -- -D warnings
+
+      - name: build
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo build --workspace --all-features $excludes
+
+      - name: test
+        run: |
+          excludes=""
+          for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
+          cargo test --workspace --all-features $excludes -- --nocapture
+
+  compute-version:
+    name: Resolve research version
+    needs: [build-test]
+    if: always() && (needs.build-test.result == 'success' || needs.build-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.stamp.outputs.version }}
+      binary: ${{ steps.stamp.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract base version
+        id: base
+        uses: greenticai/.github/.github/actions/extract-cargo-version@main
+
+      - name: Resolve research version
+        id: stamp
+        env:
+          BASE: ${{ steps.base.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The research (rnd) lane publishes the EXACT Cargo.toml version — no
+          # RUN_ID stamping (unlike the dev lane). It MUST be an
+          # `X.Y.Z-research[.N]` pre-release so:
+          #   - the `<crate>-rnd` crates.io publish + the
+          #     `<crate>-rnd-v{version}-{target}` binstall archive both use it
+          #     verbatim (rnd-release-binaries + rnd-publish take it as input), and
+          #   - it sorts BELOW stable on crates.io, never preempting `<crate>`.
+          # Bump the version in Cargo.toml (e.g. 1.2.0-research.0 -> .1) to cut a
+          # new rnd build; re-publishing the same version is rejected by crates.io.
+          if [[ ! "${BASE}" =~ -research(\.[0-9A-Za-z-]+)*$ ]]; then
+            echo "::error::rnd lane expects an X.Y.Z-research version; got '${BASE}'."
+            echo "::error::Bump Cargo.toml [workspace.package] version to X.Y.Z-research and retry."
+            exit 1
+          fi
+          # NOTE for DevOps review: `cargo binstall <crate>-rnd` on a PRE-RELEASE
+          # version needs `--version`; the dev lane sidesteps this with a regular
+          # binary version. Decide whether `gtc-research install` passes the
+          # explicit version (it already pins from the toolchain manifest) or
+          # whether the rnd binary crate should publish a regular version too.
+          echo "version=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "Research version: ${BASE} (used verbatim for lib + <crate>-rnd binary)"

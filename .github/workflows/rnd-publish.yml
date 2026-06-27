@@ -1,0 +1,432 @@
+name: Rnd Publish
+
+# Reusable workflow that publishes dev crates to crates.io.
+#
+# Runs AFTER dev-release-binaries.yml in the rnd (research) lane so that a failed
+# binary build prevents a broken crate from being published. The crate
+# version is pre-computed by dev-prepare.yml and passed in via `version`.
+#
+# For binary-crates this workflow runs the rewrite-binary-name.py
+# bifurcation so the crate lands on crates.io as `<crate>-rnd` (or as both
+# `<crate>` library + `<crate>-rnd` binary for dual-role crates).
+#
+# Caller pattern (emitted by sync-dev-publish.sh):
+#
+#   jobs:
+#     dev-prepare: { uses: .../dev-prepare.yml@main, ... }
+#     dev-binaries-<pkg>:
+#       needs: dev-prepare
+#       uses: .../dev-release-binaries.yml@main
+#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#     dev-publish:
+#       needs: [dev-prepare, dev-binaries-<pkg>]
+#       uses: .../dev-publish.yml@main
+#       with:
+#         version: ${{ needs.dev-prepare.outputs.version }}
+#         crates: ...
+#         binary-crates: ...
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Stamped LIBRARY version from dev-prepare.yml's `lib-version` output (form: `M.m.p-dev.{RUN_ID}` for pre-release base, else `M.m.{RUN_ID}`). Used to stamp the workspace and publish library crates under `<name>`. Required."
+        required: true
+        type: string
+      binary-version:
+        description: "Stamped BINARY version from dev-prepare.yml's `binary-version` output (always regular release `M.m.{RUN_ID}`). Used to re-stamp `target/bifurcate/<name>-rnd/Cargo.toml` after the bifurcation step so the `<name>-rnd` crates.io publish lands as a regular release (not pre-release) — keeps `cargo binstall <name>-rnd` working without flags. Required when `binary-crates` is non-empty AND `version` is on pre-release form. If unset, the bifurcate copy keeps the lib-version (legacy behavior)."
+        type: string
+        default: ""
+      crates:
+        description: "Space-separated ordered list of crates to publish (dependency order)"
+        required: true
+        type: string
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      setup-script:
+        description: "Optional shell commands to run before publish (e.g., ci/setup.sh)"
+        type: string
+        default: ""
+      binary-crates:
+        description: "Subset of `crates` that ship a binary and must publish under the `<name>-rnd` alias on the rnd (research) lane (Phase C of binary-bifurcation plan)"
+        type: string
+        default: ""
+      dual-role-binary-crates:
+        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-rnd` from `target/bifurcate/<name>-rnd/`. With `require-pre-release: true`, the library publish lands as a pre-release version (e.g. `0.6.0-dev.{RUN_ID}`) which sorts below stable on crates.io — preventing stable namespace pollution. See plans/binary-bifurcation.md 2026-04-27 update."
+        type: string
+        default: ""
+      require-pre-release:
+        description: "If true, fail unless the input `version` is on `M.m.p-dev.{N}` pre-release form. Set by binary-bifurcated repos. Mirrors the same input on dev-prepare.yml so a dispatched dev-publish.yml run also validates."
+        type: boolean
+        default: false
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  publish:
+    name: Publish dev crates to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Validate dev version form
+        env:
+          DEV_VERSION: ${{ inputs.version }}
+          REQUIRE_PRE_RELEASE: ${{ inputs.require-pre-release }}
+        run: |
+          set -euo pipefail
+          if [[ "${REQUIRE_PRE_RELEASE}" == "true" ]]; then
+            if ! [[ "${DEV_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+              echo "::error::version '${DEV_VERSION}' is not on 'M.m.p-dev.N' pre-release form, but require-pre-release=true."
+              echo "::error::Binary-bifurcated repos must publish dev versions as pre-release to avoid stable namespace pollution on crates.io."
+              echo "::error::See plans/binary-bifurcation.md 2026-04-27 update."
+              exit 1
+            fi
+          fi
+
+      - name: Extract base version
+        id: base
+        uses: greenticai/.github/.github/actions/extract-cargo-version@main
+
+      - name: Stamp Cargo.toml to pre-computed dev version
+        env:
+          BASE: ${{ steps.base.outputs.version }}
+          DEV_VERSION: ${{ inputs.version }}
+          CRATES: ${{ inputs.crates }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "Stamping version: ${BASE} → ${DEV_VERSION}"
+          find . -name Cargo.toml -not -path './target/*' -print0 | while IFS= read -r -d '' f; do
+            if grep -q "^version = \"${BASE}\"" "$f"; then
+              sed -i "s/^version = \"${BASE}\"/version = \"${DEV_VERSION}\"/" "$f"
+              echo "  stamped ${f}"
+            fi
+          done
+          # Cover publishable inner crates that don't match BASE — e.g. a
+          # single-package workspace's `crates/<inner>/Cargo.toml` on an
+          # independent version cadence (greentic-deployer +
+          # greentic-deploy-spec). Without this pass, the inner crate keeps
+          # its old version and the publish step's "already exists, skipping"
+          # branch produces a top-level crate that references missing symbols.
+          # See plans/next-gen-deployment.md A4 round-1 follow-up + the
+          # script's module docstring.
+          python3 -m pip install --quiet tomlkit
+          curl -fsSL -o /tmp/stamp-inner-crates.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/stamp-inner-crates.py
+          echo "::group::Stamp inner publishable crates (if any diverge from BASE)"
+          python3 /tmp/stamp-inner-crates.py \
+            --crates "${CRATES}" \
+            --rnd-version "${DEV_VERSION}" \
+            --run-id "${RUN_ID}"
+          echo "::endgroup::"
+
+      - name: Bifurcate binary crate names
+        if: inputs.binary-crates != ''
+        env:
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+        run: |
+          set -euo pipefail
+          # Install tomli_w (the script uses it to write the copy's Cargo.toml
+          # with workspace inheritance resolved). pip is pre-installed on the
+          # GitHub runner; tomli_w is a tiny pure-python package.
+          python3 -m pip install --quiet tomli-w
+          curl -fsSL -o /tmp/rewrite-binary-name.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/rewrite-binary-name.py
+          for crate in $BINARY_CRATES; do
+            dr_flag=""
+            for dr in $DUAL_ROLE; do
+              if [ "$dr" = "$crate" ]; then
+                dr_flag="--dual-role"
+                break
+              fi
+            done
+            echo "::group::Bifurcate $crate ($dr_flag)"
+            python3 /tmp/rewrite-binary-name.py \
+              --crate "$crate" --suffix dev --workdir . $dr_flag
+            echo "::endgroup::"
+          done
+
+      - name: Re-stamp binary crates to binary-version
+        if: inputs.binary-crates != '' && inputs.binary-version != '' && inputs.binary-version != inputs.version
+        env:
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+          LIB_VERSION: ${{ inputs.version }}
+          BIN_VERSION: ${{ inputs.binary-version }}
+        run: |
+          set -euo pipefail
+          # The earlier "Stamp Cargo.toml" step rewrote every concrete
+          # `version = "<BASE>"` line to LIB_VERSION (pre-release form, e.g.
+          # 0.6.0-dev.{RUN_ID}). At this point binary crates resolve to
+          # LIB_VERSION via either:
+          #   - dual-role: bifurcate copy at target/bifurcate/<crate>-rnd/
+          #     where rewrite-binary-name.py resolved workspace inheritance,
+          #     so the copy's [package].version literally reads LIB_VERSION
+          #   - binary-only: in-place rewrite kept the crate inside the
+          #     workspace, with [package].version still on `version.workspace
+          #     = true` inheriting from [workspace.package].version (now
+          #     stamped to LIB_VERSION). For single-package binary-only repos,
+          #     [package].version was directly stamped to LIB_VERSION.
+          #
+          # We re-stamp both kinds to BIN_VERSION (regular release, e.g.
+          # 0.6.{RUN_ID}). For dual-role we mutate ONLY the staged copy so
+          # the library publish keeps LIB_VERSION. For binary-only we mutate
+          # the in-place Cargo.toml, replacing either `version.workspace =
+          # true` or `version = "<LIB_VERSION>"` with a concrete BIN_VERSION
+          # — overrides the workspace inheritance for that one crate without
+          # affecting sibling library crates that publish under LIB_VERSION.
+          #
+          # Net result: `<name>-rnd` publishes as regular release, resolvable
+          # by `cargo binstall <name>-rnd` without `--version` flags.
+          echo "Re-stamping binary crates: ${LIB_VERSION} → ${BIN_VERSION}"
+          for crate in $BINARY_CRATES; do
+            is_dual_role=0
+            for dr in $DUAL_ROLE; do
+              if [ "$dr" = "$crate" ]; then
+                is_dual_role=1
+                break
+              fi
+            done
+            if [ "$is_dual_role" -eq 1 ]; then
+              copy="target/bifurcate/${crate}-dev/Cargo.toml"
+              if [ ! -f "$copy" ]; then
+                echo "::error::Expected bifurcate copy at ${copy} but it does not exist"
+                exit 1
+              fi
+              if ! grep -q "^version = \"${LIB_VERSION}\"" "$copy"; then
+                echo "::error::Bifurcate copy ${copy} does not contain expected version line 'version = \"${LIB_VERSION}\"' — rewrite-binary-name.py output unexpected"
+                exit 1
+              fi
+              sed -i "s/^version = \"${LIB_VERSION}\"/version = \"${BIN_VERSION}\"/" "$copy"
+              echo "  re-stamped ${copy} (dual-role copy)"
+            else
+              # Locate the in-place-rewritten Cargo.toml by [package].name == <crate>-rnd.
+              target=$(python3 -c '
+          import sys, tomllib, pathlib
+          crate = sys.argv[1]
+          target_name = f"{crate}-rnd"
+          excluded = {"target", ".git", "node_modules", ".venv"}
+          matches = []
+          for p in pathlib.Path(".").rglob("Cargo.toml"):
+              if any(part in excluded for part in p.parts):
+                  continue
+              try:
+                  with p.open("rb") as fh:
+                      data = tomllib.load(fh)
+              except Exception:
+                  continue
+              if data.get("package", {}).get("name") == target_name:
+                  matches.append(str(p))
+          if len(matches) != 1:
+              print(f"error: expected exactly one Cargo.toml with [package].name == {target_name!r}, found {len(matches)}: {matches}", file=sys.stderr)
+              sys.exit(1)
+          print(matches[0])
+          ' "$crate")
+              if [ -z "$target" ]; then
+                echo "::error::Could not locate in-place-rewritten Cargo.toml for binary-only crate '${crate}'"
+                exit 1
+              fi
+              # Three forms to handle:
+              #   - `version.workspace = true` (sub-crate inheriting; common)
+              #   - `version = { workspace = true }` (inline-table form)
+              #   - `version = "<LIB_VERSION>"` (single-package repo, stamped earlier)
+              if grep -qE "^version\.workspace\s*=\s*true" "$target"; then
+                sed -i -E "s|^version\.workspace\s*=\s*true|version = \"${BIN_VERSION}\"|" "$target"
+              elif grep -qE "^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}" "$target"; then
+                sed -i -E "s|^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}|version = \"${BIN_VERSION}\"|" "$target"
+              elif grep -q "^version = \"${LIB_VERSION}\"" "$target"; then
+                sed -i "s|^version = \"${LIB_VERSION}\"|version = \"${BIN_VERSION}\"|" "$target"
+              else
+                echo "::error::${target}: cannot locate version line to re-stamp (expected 'version.workspace = true', 'version = { workspace = true }', or 'version = \"${LIB_VERSION}\"')"
+                exit 1
+              fi
+              echo "  re-stamped ${target} (binary-only, in-place)"
+            fi
+          done
+
+      - name: Compute effective publish list
+        id: effective
+        env:
+          CRATES: ${{ inputs.crates }}
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+        run: |
+          set -euo pipefail
+          # Emit one line per publish operation as "<kind>\t<arg>":
+          #   pkg\t<name>       → cargo publish -p <name>
+          #   manifest\t<path>  → cargo publish --manifest-path <path>
+          # Dual-role crates emit BOTH: library (pkg) + binary (manifest copy).
+          # Binary-only crates emit only the -rnd pkg.
+          is_in() {
+            local needle="$1"; shift
+            for item in "$@"; do
+              [ "$item" = "$needle" ] && return 0
+            done
+            return 1
+          }
+          # Read inputs into arrays (bash word-splitting on whitespace).
+          read -ra crates_arr <<<"$CRATES"
+          read -ra bins_arr <<<"$BINARY_CRATES"
+          read -ra dual_arr <<<"$DUAL_ROLE"
+          > /tmp/publish-list.txt
+          for crate in "${crates_arr[@]}"; do
+            if is_in "$crate" "${bins_arr[@]}"; then
+              if is_in "$crate" "${dual_arr[@]}"; then
+                printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
+                printf 'manifest\ttarget/bifurcate/%s-dev/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
+              else
+                printf 'pkg\t%s-dev\n' "$crate" >> /tmp/publish-list.txt
+              fi
+            else
+              printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
+            fi
+          done
+          echo "Effective publish list:"
+          cat /tmp/publish-list.txt
+
+      - name: Publish crates
+        env:
+          DEV_VERSION: ${{ inputs.version }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Accepts two forms (from the effective publish list):
+          #   publish_entry pkg <crate>        → cargo publish -p <crate>
+          #   publish_entry manifest <path>    → cargo publish --manifest-path <path>
+          # Dry-run before each publish, in the same loop. Earlier crates land
+          # on crates.io before later ones run their dry-run, so workspace path
+          # deps published earlier in this run are resolvable when later crates
+          # validate. Combining the loops fixes the bootstrap case where a
+          # workspace member is being published to crates.io for the first time.
+          dry_run_entry() {
+            local kind="$1"
+            local arg="$2"
+            if [ "$kind" = "manifest" ]; then
+              cargo publish --manifest-path "$arg" \
+                --dry-run --allow-dirty --no-verify
+            else
+              cargo publish -p "$arg" \
+                --dry-run --allow-dirty --no-verify
+            fi
+          }
+
+          publish_entry() {
+            local kind="$1"
+            local arg="$2"
+            local label
+            if [ "$kind" = "manifest" ]; then
+              label="$(basename "$(dirname "$arg")")"
+            else
+              label="$arg"
+            fi
+            local max_retries=5
+            local delay=10
+            local attempt=0
+            local output=""
+
+            while [ "$attempt" -lt "$max_retries" ]; do
+              attempt=$((attempt + 1))
+              echo "::group::Publishing ${label} (attempt ${attempt}/${max_retries})"
+
+              local cmd_ok=1
+              if [ "$kind" = "manifest" ]; then
+                output=$(cargo publish --manifest-path "$arg" \
+                    --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
+              else
+                output=$(cargo publish -p "$arg" \
+                    --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
+              fi
+
+              if [ "$cmd_ok" -eq 0 ]; then
+                echo "$output"
+                echo "::endgroup::"
+                echo "✓ Published ${label} ${DEV_VERSION}"
+                return 0
+              fi
+
+              echo "$output"
+              echo "::endgroup::"
+
+              if echo "$output" | grep -qiE "already exists|already uploaded|crate version .* is already uploaded"; then
+                echo "✓ ${label} already published — skipping (idempotent)"
+                return 0
+              fi
+
+              if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
+                # crates.io 429 bodies carry a reset hint:
+                #   "Please try again after Mon, 27 Apr 2026 09:04:14 GMT".
+                # Sleep until that timestamp + a 5s buffer when parseable; otherwise
+                # fall back to exponential backoff.
+                local reset_str reset_epoch wait_s
+                reset_str=$(echo "$output" | sed -n 's/.*Please try again after \([^.]*GMT\).*/\1/p' | head -n 1)
+                wait_s=""
+                if [ -n "$reset_str" ]; then
+                  reset_epoch=$(date -u -d "$reset_str" +%s 2>/dev/null || true)
+                  if [ -n "$reset_epoch" ]; then
+                    wait_s=$((reset_epoch - $(date -u +%s) + 5))
+                    [ "$wait_s" -lt 5 ] && wait_s=5
+                    [ "$wait_s" -gt 180 ] && wait_s=180
+                  fi
+                fi
+                if [ -n "$wait_s" ]; then
+                  echo "⚠ Rate limited, sleeping ${wait_s}s until reset (${reset_str})..."
+                  sleep "$wait_s"
+                else
+                  echo "⚠ Transient error, retrying in ${delay}s..."
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                  [ "$delay" -gt 120 ] && delay=120
+                fi
+                continue
+              fi
+
+              echo "::error::Failed to publish ${label}: non-retryable error"
+              return 1
+            done
+
+            echo "::error::Failed to publish ${label} after ${max_retries} attempts"
+            return 1
+          }
+
+          echo "Effective publish list:"
+          cat /tmp/publish-list.txt
+          echo ""
+          echo "Dev version: ${DEV_VERSION}"
+          echo ""
+
+          published=0
+          while IFS=$'\t' read -r kind arg; do
+            [ -z "$kind" ] && continue
+            echo "::group::Dry-run ${kind}=${arg}"
+            dry_run_entry "$kind" "$arg"
+            echo "::endgroup::"
+            publish_entry "$kind" "$arg"
+            published=$((published + 1))
+            echo "Waiting 5s for index propagation..."
+            sleep 5
+          done < /tmp/publish-list.txt
+
+          echo ""
+          echo "✓ All ${published} entry/entries published successfully"
