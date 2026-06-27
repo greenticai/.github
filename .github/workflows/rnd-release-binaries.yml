@@ -1,32 +1,29 @@
 name: Rnd Release Binaries
 
 # Reusable workflow that builds binaries for the 6 supported targets on a
-# develop-lane commit, packages them with names matching what cargo-binstall
+# research-lane commit, packages them with names matching what cargo-binstall
 # expects for the `<crate>-rnd` crates.io alias, creates (or reuses) a
-# prerelease GitHub Release tagged `v<rnd-version>`, and uploads the archives.
+# prerelease GitHub Release tagged `v<research-version>`, and uploads the archives.
 #
-# Phase C.4 of plans/binary-bifurcation.md. Pairs with dev-publish.yml (which
+# Phase C.4 of plans/binary-bifurcation.md. Pairs with rnd-publish.yml (which
 # publishes the `<crate>-rnd` crate to crates.io) so that:
 #
-#   cargo binstall <crate>-rnd
+#   cargo binstall <crate>-rnd --version <X.Y.Z-research>
 #
 # resolves the binstall metadata in the crates.io crate, computes the archive
 # URL from { repo } + v{ version } + { name = <crate>-rnd } + { target }, and
-# downloads the matching archive from this release.
+# downloads the matching archive from this release. The research version is a
+# semver pre-release, so the `--version` flag is required (gtc-research supplies it).
 #
 # Called from per-repo caller workflows like:
 #
 #   jobs:
-#     publish:
-#       uses: greenticai/.github/.github/workflows/dev-publish.yml@main
-#       with: { crates: ..., binary-crates: ..., dual-role-binary-crates: ... }
-#       secrets: inherit
-#     binaries:
-#       needs: publish
-#       uses: greenticai/.github/.github/workflows/dev-release-binaries.yml@main
+#     rnd-binaries:
+#       needs: rnd-prepare
+#       uses: greenticai/.github/.github/workflows/rnd-release-binaries.yml@main
 #       with:
 #         package: greentic-setup
-#         version: ${{ needs.publish.outputs.version }}
+#         version: ${{ needs.rnd-prepare.outputs.version }}
 
 on:
   workflow_call:
@@ -41,7 +38,7 @@ on:
         type: string
         default: ""
       version:
-        description: "Stamped dev version (e.g. '0.5.24824839949'). Typically passed from the paired dev-publish job's `version` output."
+        description: "Verbatim research version (e.g. '1.2.0-research.1'). Passed from rnd-prepare's `version` output."
         required: true
         type: string
       rust-version:
@@ -118,14 +115,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: dev-release-binaries-${{ matrix.target }}
+          shared-key: rnd-release-binaries-${{ matrix.target }}
           # Don't cache ~/.cargo/bin — these jobs don't `cargo install` anything,
           # and caching the rustup multi-call shims has poisoned macOS runners after
           # runner-image refreshes (cargo dispatches as rustup-init installer,
           # failing with `error: unexpected argument 'build' found`).
           cache-bin: false
 
-      - name: Resolve binary + dev-name
+      - name: Resolve binary + rnd-name
         id: names
         shell: bash
         env:
@@ -166,11 +163,11 @@ jobs:
           if [[ "$OS" == "windows" ]]; then
             bin_suffix=".exe"
           fi
-          # Archive stem uses the DEV package name so cargo-binstall's
+          # Archive stem uses the RND package name so cargo-binstall's
           # { name } substitution matches (name = <crate>-rnd on crates.io).
           stem="${RND_NAME}-v${VERSION}-${TARGET}"
           mkdir -p "dist/${stem}"
-          # Binary inside the archive is renamed to the dev name so
+          # Binary inside the archive is renamed to the rnd name so
           # binstall's { bin } substitution (which reads [[bin]].name from
           # the rewritten -rnd crate on crates.io) matches the file.
           cp "target/${TARGET}/release/${BINARY}${bin_suffix}" \
@@ -226,19 +223,19 @@ jobs:
           # this reusable workflow once per binary crate (e.g. greentic-dwbase
           # calls it 3x for dwbase-cli, dwbase-node, dwbase-pack-runner) within
           # the same parent workflow run. Without `package` in the name, all
-          # invocations produce artifacts named `dev-release-binaries-<target>`,
+          # invocations produce artifacts named `rnd-release-binaries-<target>`,
           # which collide on the runner-shared artifact namespace; the
           # attach-to-release job then downloads only the LAST upload per name
           # (per `actions/download-artifact@v4` deduplication semantics) and
           # the other crates' archives for that target are silently dropped —
           # producing the asymmetric "missing linux assets for dwbase-node /
           # dwbase-pack-runner" observed in the v0.2.25154159466 release.
-          name: dev-release-binaries-${{ inputs.package }}-${{ matrix.target }}
+          name: rnd-release-binaries-${{ inputs.package }}-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
   attach-to-release:
-    name: Attach binaries to dev Release
+    name: Attach binaries to research Release
     runs-on: ubuntu-latest
     needs: build-binaries
     steps:
@@ -247,16 +244,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           # Match this caller's package only — the parent workflow run may
-          # contain artifacts from other dev-release-binaries invocations
+          # contain artifacts from other rnd-release-binaries invocations
           # (one per binary crate), each scoped by `inputs.package`. Without
           # this scope, the attach job would race with sibling invocations
-          # for the same `dev-release-binaries-<target>` name and drop
+          # for the same `rnd-release-binaries-<target>` name and drop
           # archives. See upload-artifact comment above.
-          pattern: dev-release-binaries-${{ inputs.package }}-*
+          pattern: rnd-release-binaries-${{ inputs.package }}-*
           merge-multiple: true
           path: .dist-staging
 
-      - name: Ensure dev prerelease exists
+      - name: Ensure research prerelease exists
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
@@ -267,15 +264,15 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — reusing (idempotent)"
           else
-            # Dev releases are prerelease + not latest so they don't
+            # Research releases are prerelease + not latest so they don't
             # displace stable release visibility on the repo page. Tag
-            # is created at github.sha (the develop commit that triggered
+            # is created at github.sha (the research commit that triggered
             # this workflow) so binstall downloads correspond exactly to
             # the code state that produced the published crate.
             gh release create "$tag" \
               --target "$SHA" \
-              --title "$tag (dev build)" \
-              --notes "Automated dev-lane build from develop. Paired with \`$(gh repo view --json name -q .name)-dev@${VERSION}\` on crates.io." \
+              --title "$tag (research build)" \
+              --notes "Automated research-lane build. Paired with \`$(gh repo view --json name -q .name)-rnd@${VERSION}\` on crates.io." \
               --prerelease \
               --latest=false
           fi

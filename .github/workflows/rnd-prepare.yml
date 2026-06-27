@@ -1,29 +1,30 @@
 name: Rnd Prepare
 
-# Reusable workflow that runs fmt/clippy/build/test for the research lane
-# and computes the stamped dev version `{M.m.GITHUB_RUN_ID}`. The version
-# output is consumed by dev-release-binaries.yml (to build + name archives)
-# and dev-publish.yml (to stamp Cargo.toml before cargo publish).
+# Reusable workflow that runs fmt/clippy/build/test for the research lane and
+# resolves the verbatim `X.Y.Z-research` version from Cargo.toml (NO RUN_ID
+# stamping — unlike the dev lane). The version output is consumed by
+# rnd-release-binaries.yml (to build + name archives) and rnd-publish.yml (to
+# stamp Cargo.toml before cargo publish).
 #
-# This runs FIRST in the rnd (research) lane so that dev-publish.yml (which actually
-# pushes to crates.io) can be ordered AFTER dev-release-binaries.yml. If
-# a binary build fails, cargo publish never runs — no orphan crate version
+# This runs FIRST in the rnd (research) lane so that rnd-publish.yml (which
+# actually pushes to crates.io) can be ordered AFTER rnd-release-binaries.yml.
+# If a binary build fails, cargo publish never runs — no orphan crate version
 # left on crates.io without matching binaries.
 #
-# Caller pattern (emitted by sync-dev-publish.sh):
+# Caller pattern (emitted by sync-rnd-publish.sh):
 #
 #   jobs:
-#     dev-prepare:
-#       uses: greenticai/.github/.github/workflows/dev-prepare.yml@main
+#     rnd-prepare:
+#       uses: greenticai/.github/.github/workflows/rnd-prepare.yml@main
 #       secrets: inherit
-#     dev-binaries-<pkg>:
-#       needs: dev-prepare
-#       uses: greenticai/.github/.github/workflows/dev-release-binaries.yml@main
-#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
-#     dev-publish:
-#       needs: [dev-prepare, dev-binaries-<pkg>]
-#       uses: greenticai/.github/.github/workflows/dev-publish.yml@main
-#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
+#     rnd-binaries-<pkg>:
+#       needs: rnd-prepare
+#       uses: greenticai/.github/.github/workflows/rnd-release-binaries.yml@main
+#       with: { version: ${{ needs.rnd-prepare.outputs.version }}, ... }
+#     rnd-publish:
+#       needs: [rnd-prepare, rnd-binaries-<pkg>]
+#       uses: greenticai/.github/.github/workflows/rnd-publish.yml@main
+#       with: { version: ${{ needs.rnd-prepare.outputs.version }}, ... }
 #       secrets: inherit
 
 on:
@@ -49,20 +50,10 @@ on:
         description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
         type: string
         default: ""
-      require-pre-release:
-        description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
-        type: boolean
-        default: false
     outputs:
       version:
-        description: "Stamped LIBRARY version (alias retained for backward compatibility — equals `lib-version`). Form depends on Cargo.toml base: `M.m.p-dev.{GITHUB_RUN_ID}` if base is pre-release `M.m.p-dev.N` (preferred for binary-bifurcated repos — sorts below stable on crates.io), else `{major}.{minor}.{GITHUB_RUN_ID}` regular release. Used to stamp the workspace and publish library crates under `<name>`."
+        description: "Verbatim research version (`X.Y.Z-research[.N]`) read from Cargo.toml. Used for both the workspace stamp and the `<crate>-rnd` binstall archive naming — the rnd lane does NOT regularize the binary version, so `cargo binstall <crate>-rnd` needs `--version`."
         value: ${{ jobs.compute-version.outputs.version }}
-      lib-version:
-        description: "Explicit alias of `version` — the LIBRARY version. Used to stamp Cargo.toml across the workspace. For binary-bifurcated dual-role repos, this is intentionally pre-release so dev publishes of `<name>` libraries don't preempt stable on crates.io."
-        value: ${{ jobs.compute-version.outputs.version }}
-      binary-version:
-        description: "Stamped BINARY version (regular release `{major}.{minor}.{GITHUB_RUN_ID}`). Used by binary-bifurcated repos for the `<name>-rnd` crates.io publish + binstall archive naming. Regular release (not pre-release) so `cargo binstall <name>-rnd` resolves without `--version` flags. For repos on a regular-release Cargo.toml base, this equals `lib-version`."
-        value: ${{ jobs.compute-version.outputs.binary }}
 
 permissions:
   contents: read
@@ -129,7 +120,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.stamp.outputs.version }}
-      binary: ${{ steps.stamp.outputs.version }}
     steps:
       - uses: actions/checkout@v6
 
@@ -158,10 +148,10 @@ jobs:
             echo "::error::Bump Cargo.toml [workspace.package] version to X.Y.Z-research and retry."
             exit 1
           fi
-          # NOTE for DevOps review: `cargo binstall <crate>-rnd` on a PRE-RELEASE
-          # version needs `--version`; the dev lane sidesteps this with a regular
-          # binary version. Decide whether `gtc-research install` passes the
-          # explicit version (it already pins from the toolchain manifest) or
-          # whether the rnd binary crate should publish a regular version too.
+          # NOTE: `cargo binstall <crate>-rnd` on this PRE-RELEASE version needs
+          # `--version`. Unlike the dev lane (which regularizes the binary
+          # version so bare binstall resolves), the rnd lane keeps the verbatim
+          # research version — `gtc-research install` passes the explicit
+          # `--version` it already pins from the toolchain manifest.
           echo "version=${BASE}" >> "$GITHUB_OUTPUT"
           echo "Research version: ${BASE} (used verbatim for lib + <crate>-rnd binary)"

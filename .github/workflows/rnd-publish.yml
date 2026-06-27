@@ -1,28 +1,32 @@
 name: Rnd Publish
 
-# Reusable workflow that publishes dev crates to crates.io.
+# Reusable workflow that publishes research (rnd) crates to crates.io.
 #
-# Runs AFTER dev-release-binaries.yml in the rnd (research) lane so that a failed
-# binary build prevents a broken crate from being published. The crate
-# version is pre-computed by dev-prepare.yml and passed in via `version`.
+# Runs AFTER rnd-release-binaries.yml in the rnd (research) lane so that a failed
+# binary build prevents a broken crate from being published. The crate version
+# is pre-computed by rnd-prepare.yml (verbatim X.Y.Z-research) and passed in via
+# `version`.
 #
-# For binary-crates this workflow runs the rewrite-binary-name.py
-# bifurcation so the crate lands on crates.io as `<crate>-rnd` (or as both
-# `<crate>` library + `<crate>-rnd` binary for dual-role crates).
+# For binary-crates this workflow runs the rewrite-binary-name.py bifurcation so
+# the crate lands on crates.io as `<crate>-rnd` (or as both `<crate>` library +
+# `<crate>-rnd` binary for dual-role crates). The research version is a semver
+# pre-release, so `cargo binstall <crate>-rnd` requires `--version
+# <X.Y.Z-research>` (gtc-research pins it from the toolchain manifest) — unlike
+# the dev lane, the binary version is NOT regularized.
 #
-# Caller pattern (emitted by sync-dev-publish.sh):
+# Caller pattern (emitted by sync-rnd-publish.sh):
 #
 #   jobs:
-#     dev-prepare: { uses: .../dev-prepare.yml@main, ... }
-#     dev-binaries-<pkg>:
-#       needs: dev-prepare
-#       uses: .../dev-release-binaries.yml@main
-#       with: { version: ${{ needs.dev-prepare.outputs.version }}, ... }
-#     dev-publish:
-#       needs: [dev-prepare, dev-binaries-<pkg>]
-#       uses: .../dev-publish.yml@main
+#     rnd-prepare: { uses: .../rnd-prepare.yml@main, ... }
+#     rnd-binaries-<pkg>:
+#       needs: rnd-prepare
+#       uses: .../rnd-release-binaries.yml@main
+#       with: { version: ${{ needs.rnd-prepare.outputs.version }}, ... }
+#     rnd-publish:
+#       needs: [rnd-prepare, rnd-binaries-<pkg>]
+#       uses: .../rnd-publish.yml@main
 #       with:
-#         version: ${{ needs.dev-prepare.outputs.version }}
+#         version: ${{ needs.rnd-prepare.outputs.version }}
 #         crates: ...
 #         binary-crates: ...
 #       secrets: inherit
@@ -31,13 +35,9 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Stamped LIBRARY version from dev-prepare.yml's `lib-version` output (form: `M.m.p-dev.{RUN_ID}` for pre-release base, else `M.m.{RUN_ID}`). Used to stamp the workspace and publish library crates under `<name>`. Required."
+        description: "Verbatim research version from rnd-prepare.yml's `version` output (`X.Y.Z-research[.N]`). Used to stamp the workspace and publish crates. Required."
         required: true
         type: string
-      binary-version:
-        description: "Stamped BINARY version from dev-prepare.yml's `binary-version` output (always regular release `M.m.{RUN_ID}`). Used to re-stamp `target/bifurcate/<name>-rnd/Cargo.toml` after the bifurcation step so the `<name>-rnd` crates.io publish lands as a regular release (not pre-release) — keeps `cargo binstall <name>-rnd` working without flags. Required when `binary-crates` is non-empty AND `version` is on pre-release form. If unset, the bifurcate copy keeps the lib-version (legacy behavior)."
-        type: string
-        default: ""
       crates:
         description: "Space-separated ordered list of crates to publish (dependency order)"
         required: true
@@ -55,13 +55,9 @@ on:
         type: string
         default: ""
       dual-role-binary-crates:
-        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged); binary publishes as `<name>-rnd` from `target/bifurcate/<name>-rnd/`. With `require-pre-release: true`, the library publish lands as a pre-release version (e.g. `0.6.0-dev.{RUN_ID}`) which sorts below stable on crates.io — preventing stable namespace pollution. See plans/binary-bifurcation.md 2026-04-27 update."
+        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged) at the verbatim `-research` version; binary publishes as `<name>-rnd` from `target/bifurcate/<name>-rnd/`. Because `-research` is a pre-release it sorts below stable on crates.io, so stable `<name>` consumers are never preempted."
         type: string
         default: ""
-      require-pre-release:
-        description: "If true, fail unless the input `version` is on `M.m.p-dev.{N}` pre-release form. Set by binary-bifurcated repos. Mirrors the same input on dev-prepare.yml so a dispatched dev-publish.yml run also validates."
-        type: boolean
-        default: false
     secrets:
       CARGO_REGISTRY_TOKEN:
         required: true
@@ -75,7 +71,7 @@ env:
 
 jobs:
   publish:
-    name: Publish dev crates to crates.io
+    name: Publish research crates to crates.io
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -88,37 +84,35 @@ jobs:
         if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
 
-      - name: Validate dev version form
+      - name: Validate research version form
         env:
-          DEV_VERSION: ${{ inputs.version }}
-          REQUIRE_PRE_RELEASE: ${{ inputs.require-pre-release }}
+          RND_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ "${REQUIRE_PRE_RELEASE}" == "true" ]]; then
-            if ! [[ "${DEV_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
-              echo "::error::version '${DEV_VERSION}' is not on 'M.m.p-dev.N' pre-release form, but require-pre-release=true."
-              echo "::error::Binary-bifurcated repos must publish dev versions as pre-release to avoid stable namespace pollution on crates.io."
-              echo "::error::See plans/binary-bifurcation.md 2026-04-27 update."
-              exit 1
-            fi
+          # The rnd lane only ever publishes `X.Y.Z-research[.N]` pre-releases —
+          # they sort below stable on crates.io so they never preempt `<name>`.
+          if ! [[ "${RND_VERSION}" =~ -research(\.[0-9A-Za-z-]+)*$ ]]; then
+            echo "::error::version '${RND_VERSION}' is not on 'X.Y.Z-research' pre-release form."
+            echo "::error::The rnd lane requires a -research version; check rnd-prepare output / Cargo.toml."
+            exit 1
           fi
 
       - name: Extract base version
         id: base
         uses: greenticai/.github/.github/actions/extract-cargo-version@main
 
-      - name: Stamp Cargo.toml to pre-computed dev version
+      - name: Stamp Cargo.toml to research version
         env:
           BASE: ${{ steps.base.outputs.version }}
-          DEV_VERSION: ${{ inputs.version }}
+          RND_VERSION: ${{ inputs.version }}
           CRATES: ${{ inputs.crates }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          echo "Stamping version: ${BASE} → ${DEV_VERSION}"
+          echo "Stamping version: ${BASE} → ${RND_VERSION}"
           find . -name Cargo.toml -not -path './target/*' -print0 | while IFS= read -r -d '' f; do
             if grep -q "^version = \"${BASE}\"" "$f"; then
-              sed -i "s/^version = \"${BASE}\"/version = \"${DEV_VERSION}\"/" "$f"
+              sed -i "s/^version = \"${BASE}\"/version = \"${RND_VERSION}\"/" "$f"
               echo "  stamped ${f}"
             fi
           done
@@ -130,13 +124,20 @@ jobs:
           # branch produces a top-level crate that references missing symbols.
           # See plans/next-gen-deployment.md A4 round-1 follow-up + the
           # script's module docstring.
+          #
+          # NOTE: stamp-inner-crates.py only understands `M.m.p` / `M.m.p-dev.N`
+          # forms. Research repos whose members all inherit one
+          # `[workspace.package].version` hit the no-op path (already stamped /
+          # `<workspace>`). A genuinely divergent, independently-versioned inner
+          # crate on the rnd lane is NOT supported yet — it would be stamped with
+          # RUN_ID (or rejected) rather than the research version.
           python3 -m pip install --quiet tomlkit
           curl -fsSL -o /tmp/stamp-inner-crates.py \
             https://raw.githubusercontent.com/greenticai/.github/main/scripts/stamp-inner-crates.py
           echo "::group::Stamp inner publishable crates (if any diverge from BASE)"
           python3 /tmp/stamp-inner-crates.py \
             --crates "${CRATES}" \
-            --rnd-version "${DEV_VERSION}" \
+            --dev-version "${RND_VERSION}" \
             --run-id "${RUN_ID}"
           echo "::endgroup::"
 
@@ -163,106 +164,8 @@ jobs:
             done
             echo "::group::Bifurcate $crate ($dr_flag)"
             python3 /tmp/rewrite-binary-name.py \
-              --crate "$crate" --suffix dev --workdir . $dr_flag
+              --crate "$crate" --suffix rnd --workdir . $dr_flag
             echo "::endgroup::"
-          done
-
-      - name: Re-stamp binary crates to binary-version
-        if: inputs.binary-crates != '' && inputs.binary-version != '' && inputs.binary-version != inputs.version
-        env:
-          BINARY_CRATES: ${{ inputs.binary-crates }}
-          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
-          LIB_VERSION: ${{ inputs.version }}
-          BIN_VERSION: ${{ inputs.binary-version }}
-        run: |
-          set -euo pipefail
-          # The earlier "Stamp Cargo.toml" step rewrote every concrete
-          # `version = "<BASE>"` line to LIB_VERSION (pre-release form, e.g.
-          # 0.6.0-dev.{RUN_ID}). At this point binary crates resolve to
-          # LIB_VERSION via either:
-          #   - dual-role: bifurcate copy at target/bifurcate/<crate>-rnd/
-          #     where rewrite-binary-name.py resolved workspace inheritance,
-          #     so the copy's [package].version literally reads LIB_VERSION
-          #   - binary-only: in-place rewrite kept the crate inside the
-          #     workspace, with [package].version still on `version.workspace
-          #     = true` inheriting from [workspace.package].version (now
-          #     stamped to LIB_VERSION). For single-package binary-only repos,
-          #     [package].version was directly stamped to LIB_VERSION.
-          #
-          # We re-stamp both kinds to BIN_VERSION (regular release, e.g.
-          # 0.6.{RUN_ID}). For dual-role we mutate ONLY the staged copy so
-          # the library publish keeps LIB_VERSION. For binary-only we mutate
-          # the in-place Cargo.toml, replacing either `version.workspace =
-          # true` or `version = "<LIB_VERSION>"` with a concrete BIN_VERSION
-          # — overrides the workspace inheritance for that one crate without
-          # affecting sibling library crates that publish under LIB_VERSION.
-          #
-          # Net result: `<name>-rnd` publishes as regular release, resolvable
-          # by `cargo binstall <name>-rnd` without `--version` flags.
-          echo "Re-stamping binary crates: ${LIB_VERSION} → ${BIN_VERSION}"
-          for crate in $BINARY_CRATES; do
-            is_dual_role=0
-            for dr in $DUAL_ROLE; do
-              if [ "$dr" = "$crate" ]; then
-                is_dual_role=1
-                break
-              fi
-            done
-            if [ "$is_dual_role" -eq 1 ]; then
-              copy="target/bifurcate/${crate}-dev/Cargo.toml"
-              if [ ! -f "$copy" ]; then
-                echo "::error::Expected bifurcate copy at ${copy} but it does not exist"
-                exit 1
-              fi
-              if ! grep -q "^version = \"${LIB_VERSION}\"" "$copy"; then
-                echo "::error::Bifurcate copy ${copy} does not contain expected version line 'version = \"${LIB_VERSION}\"' — rewrite-binary-name.py output unexpected"
-                exit 1
-              fi
-              sed -i "s/^version = \"${LIB_VERSION}\"/version = \"${BIN_VERSION}\"/" "$copy"
-              echo "  re-stamped ${copy} (dual-role copy)"
-            else
-              # Locate the in-place-rewritten Cargo.toml by [package].name == <crate>-rnd.
-              target=$(python3 -c '
-          import sys, tomllib, pathlib
-          crate = sys.argv[1]
-          target_name = f"{crate}-rnd"
-          excluded = {"target", ".git", "node_modules", ".venv"}
-          matches = []
-          for p in pathlib.Path(".").rglob("Cargo.toml"):
-              if any(part in excluded for part in p.parts):
-                  continue
-              try:
-                  with p.open("rb") as fh:
-                      data = tomllib.load(fh)
-              except Exception:
-                  continue
-              if data.get("package", {}).get("name") == target_name:
-                  matches.append(str(p))
-          if len(matches) != 1:
-              print(f"error: expected exactly one Cargo.toml with [package].name == {target_name!r}, found {len(matches)}: {matches}", file=sys.stderr)
-              sys.exit(1)
-          print(matches[0])
-          ' "$crate")
-              if [ -z "$target" ]; then
-                echo "::error::Could not locate in-place-rewritten Cargo.toml for binary-only crate '${crate}'"
-                exit 1
-              fi
-              # Three forms to handle:
-              #   - `version.workspace = true` (sub-crate inheriting; common)
-              #   - `version = { workspace = true }` (inline-table form)
-              #   - `version = "<LIB_VERSION>"` (single-package repo, stamped earlier)
-              if grep -qE "^version\.workspace\s*=\s*true" "$target"; then
-                sed -i -E "s|^version\.workspace\s*=\s*true|version = \"${BIN_VERSION}\"|" "$target"
-              elif grep -qE "^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}" "$target"; then
-                sed -i -E "s|^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}|version = \"${BIN_VERSION}\"|" "$target"
-              elif grep -q "^version = \"${LIB_VERSION}\"" "$target"; then
-                sed -i "s|^version = \"${LIB_VERSION}\"|version = \"${BIN_VERSION}\"|" "$target"
-              else
-                echo "::error::${target}: cannot locate version line to re-stamp (expected 'version.workspace = true', 'version = { workspace = true }', or 'version = \"${LIB_VERSION}\"')"
-                exit 1
-              fi
-              echo "  re-stamped ${target} (binary-only, in-place)"
-            fi
           done
 
       - name: Compute effective publish list
@@ -294,9 +197,9 @@ jobs:
             if is_in "$crate" "${bins_arr[@]}"; then
               if is_in "$crate" "${dual_arr[@]}"; then
                 printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
-                printf 'manifest\ttarget/bifurcate/%s-dev/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
+                printf 'manifest\ttarget/bifurcate/%s-rnd/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
               else
-                printf 'pkg\t%s-dev\n' "$crate" >> /tmp/publish-list.txt
+                printf 'pkg\t%s-rnd\n' "$crate" >> /tmp/publish-list.txt
               fi
             else
               printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
@@ -307,7 +210,7 @@ jobs:
 
       - name: Publish crates
         env:
-          DEV_VERSION: ${{ inputs.version }}
+          RND_VERSION: ${{ inputs.version }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
@@ -362,7 +265,7 @@ jobs:
               if [ "$cmd_ok" -eq 0 ]; then
                 echo "$output"
                 echo "::endgroup::"
-                echo "✓ Published ${label} ${DEV_VERSION}"
+                echo "✓ Published ${label} ${RND_VERSION}"
                 return 0
               fi
 
@@ -413,7 +316,7 @@ jobs:
           echo "Effective publish list:"
           cat /tmp/publish-list.txt
           echo ""
-          echo "Dev version: ${DEV_VERSION}"
+          echo "Research version: ${RND_VERSION}"
           echo ""
 
           published=0
