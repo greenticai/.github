@@ -56,10 +56,19 @@ jobs:
     with:
       version: ${{ needs.rnd-prepare.outputs.version }}
       crates: "<deps-ordered crate list>"
+      # Binary-only: only the shim <pkg>-rnd is published; the real <pkg>
+      # crate is NOT. Do NOT add it to dual-role-binary-crates (see below).
       binary-crates: "<pkg>"
-      dual-role-binary-crates: "<pkg>"
     secrets: inherit
 ```
+
+**Binary-only vs. dual-role.** A research binary whose library can't reach
+crates.io — git deps or a `publish=false` dep, the very reason the shim exists —
+must be listed in `binary-crates` **only**. Marking it in
+`dual-role-binary-crates` makes `rnd-publish` *also* run `cargo publish -p <pkg>`
+on the real library, which fails for exactly that reason. Reserve
+`dual-role-binary-crates` for a binary crate whose library genuinely publishes
+(all dependencies on crates.io).
 
 ## Open items for DevOps review
 

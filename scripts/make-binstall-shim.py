@@ -110,20 +110,73 @@ def _default_binstall() -> list[str]:
     return lines
 
 
-def build_shim(crate: str, suffix: str, version: str, manifest: Path) -> str:
+def _is_workspace_inherit(value) -> bool:
+    """True for `field = { workspace = true }` (incl. `field.workspace = true`)."""
+    return isinstance(value, dict) and value.get("workspace") is True
+
+
+def _find_workspace_package(manifest: Path, workdir: Path) -> dict:
+    """Nearest ancestor's [workspace.package] table (bounded by workdir), or {}.
+
+    Walks up from the source manifest to resolve `field.workspace = true`
+    inheritance, the same way rewrite-binary-name.py does for the dev lane. A
+    standalone crate with no [workspace] ancestor (e.g. greentic-start) yields {}.
+    """
+    workdir = workdir.resolve()
+    start = manifest.resolve().parent
+    for d in (start, *start.parents):
+        candidate = d / "Cargo.toml"
+        if candidate.is_file():
+            try:
+                data = tomllib.loads(candidate.read_text())
+            except (tomllib.TOMLDecodeError, OSError):
+                data = {}
+            ws = data.get("workspace")
+            if isinstance(ws, dict):
+                pkg = ws.get("package")
+                return pkg if isinstance(pkg, dict) else {}
+        if d == workdir:
+            break
+    return {}
+
+
+def _resolve_field(pkg: dict, ws_pkg: dict, field: str):
+    """Resolve a [package] field that may be literal or `field.workspace = true`."""
+    value = pkg.get(field)
+    if isinstance(value, str):
+        return value
+    if _is_workspace_inherit(value):
+        ws_value = ws_pkg.get(field)
+        if isinstance(ws_value, str):
+            return ws_value
+    return None
+
+
+def build_shim(crate: str, suffix: str, version: str, manifest: Path, workdir: Path) -> str:
     """Return the shim crate's Cargo.toml contents."""
     src = tomllib.loads(manifest.read_text())
     pkg = src.get("package", {})
+    ws_pkg = _find_workspace_package(manifest, workdir)
     shim_name = f"{crate}-{suffix}"
 
-    edition = pkg.get("edition")
-    edition = edition if isinstance(edition, str) else "2021"
-    license = pkg.get("license")
-    repository = pkg.get("repository")
-    homepage = pkg.get("homepage")
-    description = pkg.get("description")
-    if not isinstance(description, str):
-        description = f"binstall shim for {crate} (research channel)"
+    # Resolve fields that may be inherited via `field.workspace = true`. The dev
+    # lane's binary crates (e.g. greentic-pack) inherit license/edition from
+    # [workspace.package]; without this the shim would omit `license` and
+    # crates.io rejects the publish ("missing or empty metadata fields").
+    edition = _resolve_field(pkg, ws_pkg, "edition") or "2021"
+    repository = _resolve_field(pkg, ws_pkg, "repository")
+    homepage = _resolve_field(pkg, ws_pkg, "homepage")
+    description = (
+        _resolve_field(pkg, ws_pkg, "description")
+        or f"binstall shim for {crate} (research channel)"
+    )
+    license = _resolve_field(pkg, ws_pkg, "license")
+    if license is None:
+        raise SystemExit(
+            f"{crate}: cannot resolve a `license` (neither a literal string nor "
+            f"`license.workspace = true` with a workspace value). crates.io rejects "
+            f"a publish without `license`/`license-file` — set one on the source crate."
+        )
 
     binstall = pkg.get("metadata", {}).get("binstall")
     binstall_lines = (
@@ -140,8 +193,7 @@ def build_shim(crate: str, suffix: str, version: str, manifest: Path) -> str:
         f"edition = {_toml_str(edition)}",
         f"description = {_toml_str(description)}",
     ]
-    if isinstance(license, str):
-        lines.append(f"license = {_toml_str(license)}")
+    lines.append(f"license = {_toml_str(license)}")
     if isinstance(repository, str):
         lines.append(f"repository = {_toml_str(repository)}")
     if isinstance(homepage, str):
@@ -151,6 +203,14 @@ def build_shim(crate: str, suffix: str, version: str, manifest: Path) -> str:
     lines.append("publish = true")
     lines.append("")
     lines.extend(binstall_lines)
+    lines.append("")
+    # Empty [workspace] so `cargo publish` treats the staged shim as a
+    # standalone package even when it sits under a workspace repo's target/
+    # dir. Without it, cargo errors "current package believes it's in a
+    # workspace" for repos like greentic-pack/greentic-runner that have a root
+    # [workspace]. Mirrors the dev-lane bifurcation precedent
+    # (rewrite-binary-name.py writes an empty [workspace] into its staged copy).
+    lines.append("[workspace]")
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -185,7 +245,7 @@ def main() -> int:
 
     workdir = Path(args.workdir).resolve()
     manifest = _find_manifest(workdir, args.crate, args.manifest_path)
-    shim_toml = build_shim(args.crate, args.suffix, args.version, manifest)
+    shim_toml = build_shim(args.crate, args.suffix, args.version, manifest, workdir)
 
     shim_dir = Path(args.out).resolve() / f"{args.crate}-{args.suffix}"
     (shim_dir / "src").mkdir(parents=True, exist_ok=True)
