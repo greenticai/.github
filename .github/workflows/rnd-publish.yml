@@ -1,0 +1,343 @@
+name: Rnd Publish
+
+# Reusable workflow that publishes research (rnd) crates to crates.io.
+#
+# Runs AFTER rnd-release-binaries.yml in the rnd (research) lane so that a failed
+# binary build prevents a broken crate from being published. The crate version
+# is pre-computed by rnd-prepare.yml (verbatim X.Y.Z-research) and passed in via
+# `version`.
+#
+# For binary-crates this workflow publishes a dependency-free binstall SHIM
+# (make-binstall-shim.py) as `<crate>-rnd` — the real research binary crate
+# can't reach crates.io (git deps + a publish=false greentic-aw-runtime), so
+# renaming it (rewrite-binary-name.py) would still fail to publish. The shim
+# carries only [package.metadata.binstall] → the GitHub-release archive. The
+# research version is a semver pre-release, so `cargo binstall <crate>-rnd`
+# requires `--version <X.Y.Z-research>` (greentic-dev#206 pins it); the binary
+# version is NOT regularized. Dual-role crates also publish their real library
+# under `<crate>`. See RND_LANE.md (showstopper #1 / Option A).
+#
+# Caller pattern (emitted by sync-rnd-publish.sh):
+#
+#   jobs:
+#     rnd-prepare: { uses: .../rnd-prepare.yml@main, ... }
+#     rnd-binaries-<pkg>:
+#       needs: rnd-prepare
+#       uses: .../rnd-release-binaries.yml@main
+#       with: { version: ${{ needs.rnd-prepare.outputs.version }}, ... }
+#     rnd-publish:
+#       needs: [rnd-prepare, rnd-binaries-<pkg>]
+#       uses: .../rnd-publish.yml@main
+#       with:
+#         version: ${{ needs.rnd-prepare.outputs.version }}
+#         crates: ...
+#         binary-crates: ...
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Verbatim research version from rnd-prepare.yml's `version` output (`X.Y.Z-research[.N]`). Used to stamp the workspace and publish crates. Required."
+        required: true
+        type: string
+      crates:
+        description: "Space-separated ordered list of crates to publish (dependency order)"
+        required: true
+        type: string
+      rust-version:
+        description: "Rust toolchain version"
+        type: string
+        default: "1.95.0"
+      setup-script:
+        description: "Optional shell commands to run before publish (e.g., ci/setup.sh)"
+        type: string
+        default: ""
+      binary-crates:
+        description: "Subset of `crates` that ship a binary and must publish under the `<name>-rnd` alias on the rnd (research) lane (Phase C of binary-bifurcation plan)"
+        type: string
+        default: ""
+      dual-role-binary-crates:
+        description: "Subset of `binary-crates` that also publish a library under the same `[package].name`. Library publishes as `<name>` (unchanged) at the verbatim `-research` version; binary publishes as `<name>-rnd` from `target/bifurcate/<name>-rnd/`. Because `-research` is a pre-release it sorts below stable on crates.io, so stable `<name>` consumers are never preempted."
+        type: string
+        default: ""
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  publish:
+    name: Publish research crates to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run setup script
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Validate research version form
+        env:
+          RND_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # The rnd lane only ever publishes `X.Y.Z-research[.N]` pre-releases —
+          # they sort below stable on crates.io so they never preempt `<name>`.
+          if ! [[ "${RND_VERSION}" =~ -research(\.[0-9A-Za-z-]+)*$ ]]; then
+            echo "::error::version '${RND_VERSION}' is not on 'X.Y.Z-research' pre-release form."
+            echo "::error::The rnd lane requires a -research version; check rnd-prepare output / Cargo.toml."
+            exit 1
+          fi
+
+      - name: Extract base version
+        id: base
+        uses: greenticai/.github/.github/actions/extract-cargo-version@main
+
+      - name: Stamp Cargo.toml to research version
+        env:
+          BASE: ${{ steps.base.outputs.version }}
+          RND_VERSION: ${{ inputs.version }}
+          CRATES: ${{ inputs.crates }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "Stamping version: ${BASE} → ${RND_VERSION}"
+          find . -name Cargo.toml -not -path './target/*' -print0 | while IFS= read -r -d '' f; do
+            if grep -q "^version = \"${BASE}\"" "$f"; then
+              sed -i "s/^version = \"${BASE}\"/version = \"${RND_VERSION}\"/" "$f"
+              echo "  stamped ${f}"
+            fi
+          done
+          # Cover publishable inner crates that don't match BASE — e.g. a
+          # single-package workspace's `crates/<inner>/Cargo.toml` on an
+          # independent version cadence (greentic-deployer +
+          # greentic-deploy-spec). Without this pass, the inner crate keeps
+          # its old version and the publish step's "already exists, skipping"
+          # branch produces a top-level crate that references missing symbols.
+          # See plans/next-gen-deployment.md A4 round-1 follow-up + the
+          # script's module docstring.
+          #
+          # NOTE: stamp-inner-crates.py only understands `M.m.p` / `M.m.p-dev.N`
+          # forms. Research repos whose members all inherit one
+          # `[workspace.package].version` hit the no-op path (already stamped /
+          # `<workspace>`). A genuinely divergent, independently-versioned inner
+          # crate on the rnd lane is NOT supported yet — it would be stamped with
+          # RUN_ID (or rejected) rather than the research version.
+          python3 -m pip install --quiet tomlkit
+          curl -fsSL -o /tmp/stamp-inner-crates.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/stamp-inner-crates.py
+          echo "::group::Stamp inner publishable crates (if any diverge from BASE)"
+          python3 /tmp/stamp-inner-crates.py \
+            --crates "${CRATES}" \
+            --dev-version "${RND_VERSION}" \
+            --run-id "${RUN_ID}"
+          echo "::endgroup::"
+
+      - name: Generate binstall shim crates
+        if: inputs.binary-crates != ''
+        env:
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Showstopper #1 (RND_LANE.md): the research binaries (greentic-start,
+          # …) get multi-provider dw.agent via git deps + a `publish = false`
+          # greentic-aw-runtime, so `cargo publish` can NEVER publish the real
+          # crate (crates.io rejects git deps / can't resolve publish=false).
+          # rewrite-binary-name.py only RENAMES the real crate, keeping its
+          # deps — so the rename publishes would fail too.
+          #
+          # Instead, publish a dependency-free SHIM (`<crate>-rnd`) carrying only
+          # [package.metadata.binstall] → the GitHub-release archive that
+          # rnd-release-binaries.yml already built. `cargo binstall <crate>-rnd
+          # --version <v>` resolves that metadata and downloads the real binary;
+          # the published source is never run. Shim is published at the
+          # pre-release research version (install passes --version, greentic-dev#206).
+          curl -fsSL -o /tmp/make-binstall-shim.py \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/make-binstall-shim.py
+          for crate in $BINARY_CRATES; do
+            echo "::group::Generate binstall shim for ${crate}-rnd"
+            python3 /tmp/make-binstall-shim.py \
+              --crate "$crate" --suffix rnd --version "$VERSION" \
+              --workdir . --out target/shim
+            echo "::endgroup::"
+          done
+
+      - name: Compute effective publish list
+        id: effective
+        env:
+          CRATES: ${{ inputs.crates }}
+          BINARY_CRATES: ${{ inputs.binary-crates }}
+          DUAL_ROLE: ${{ inputs.dual-role-binary-crates }}
+        run: |
+          set -euo pipefail
+          # Emit one line per publish operation as "<kind>\t<arg>":
+          #   pkg\t<name>       → cargo publish -p <name>
+          #   manifest\t<path>  → cargo publish --manifest-path <path>
+          # Dual-role crates emit BOTH: library (pkg) + binary (manifest copy).
+          # Binary-only crates emit only the -rnd pkg.
+          is_in() {
+            local needle="$1"; shift
+            for item in "$@"; do
+              [ "$item" = "$needle" ] && return 0
+            done
+            return 1
+          }
+          # Read inputs into arrays (bash word-splitting on whitespace).
+          read -ra crates_arr <<<"$CRATES"
+          read -ra bins_arr <<<"$BINARY_CRATES"
+          read -ra dual_arr <<<"$DUAL_ROLE"
+          > /tmp/publish-list.txt
+          for crate in "${crates_arr[@]}"; do
+            if is_in "$crate" "${bins_arr[@]}"; then
+              # Binary crates publish from their generated binstall SHIM
+              # (target/shim/<crate>-rnd/Cargo.toml) — never the real crate,
+              # which can't reach crates.io (git deps / publish=false). A
+              # dual-role crate ALSO publishes its real library under <crate>.
+              if is_in "$crate" "${dual_arr[@]}"; then
+                printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
+              fi
+              printf 'manifest\ttarget/shim/%s-rnd/Cargo.toml\n' "$crate" >> /tmp/publish-list.txt
+            else
+              printf 'pkg\t%s\n' "$crate" >> /tmp/publish-list.txt
+            fi
+          done
+          echo "Effective publish list:"
+          cat /tmp/publish-list.txt
+
+      - name: Publish crates
+        env:
+          RND_VERSION: ${{ inputs.version }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Accepts two forms (from the effective publish list):
+          #   publish_entry pkg <crate>        → cargo publish -p <crate>
+          #   publish_entry manifest <path>    → cargo publish --manifest-path <path>
+          # Dry-run before each publish, in the same loop. Earlier crates land
+          # on crates.io before later ones run their dry-run, so workspace path
+          # deps published earlier in this run are resolvable when later crates
+          # validate. Combining the loops fixes the bootstrap case where a
+          # workspace member is being published to crates.io for the first time.
+          dry_run_entry() {
+            local kind="$1"
+            local arg="$2"
+            if [ "$kind" = "manifest" ]; then
+              cargo publish --manifest-path "$arg" \
+                --dry-run --allow-dirty --no-verify
+            else
+              cargo publish -p "$arg" \
+                --dry-run --allow-dirty --no-verify
+            fi
+          }
+
+          publish_entry() {
+            local kind="$1"
+            local arg="$2"
+            local label
+            if [ "$kind" = "manifest" ]; then
+              label="$(basename "$(dirname "$arg")")"
+            else
+              label="$arg"
+            fi
+            local max_retries=5
+            local delay=10
+            local attempt=0
+            local output=""
+
+            while [ "$attempt" -lt "$max_retries" ]; do
+              attempt=$((attempt + 1))
+              echo "::group::Publishing ${label} (attempt ${attempt}/${max_retries})"
+
+              local cmd_ok=1
+              if [ "$kind" = "manifest" ]; then
+                output=$(cargo publish --manifest-path "$arg" \
+                    --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
+              else
+                output=$(cargo publish -p "$arg" \
+                    --allow-dirty --no-verify 2>&1) && cmd_ok=0 || cmd_ok=1
+              fi
+
+              if [ "$cmd_ok" -eq 0 ]; then
+                echo "$output"
+                echo "::endgroup::"
+                echo "✓ Published ${label} ${RND_VERSION}"
+                return 0
+              fi
+
+              echo "$output"
+              echo "::endgroup::"
+
+              if echo "$output" | grep -qiE "already exists|already uploaded|crate version .* is already uploaded"; then
+                echo "✓ ${label} already published — skipping (idempotent)"
+                return 0
+              fi
+
+              if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
+                # crates.io 429 bodies carry a reset hint:
+                #   "Please try again after Mon, 27 Apr 2026 09:04:14 GMT".
+                # Sleep until that timestamp + a 5s buffer when parseable; otherwise
+                # fall back to exponential backoff.
+                local reset_str reset_epoch wait_s
+                reset_str=$(echo "$output" | sed -n 's/.*Please try again after \([^.]*GMT\).*/\1/p' | head -n 1)
+                wait_s=""
+                if [ -n "$reset_str" ]; then
+                  reset_epoch=$(date -u -d "$reset_str" +%s 2>/dev/null || true)
+                  if [ -n "$reset_epoch" ]; then
+                    wait_s=$((reset_epoch - $(date -u +%s) + 5))
+                    [ "$wait_s" -lt 5 ] && wait_s=5
+                    [ "$wait_s" -gt 180 ] && wait_s=180
+                  fi
+                fi
+                if [ -n "$wait_s" ]; then
+                  echo "⚠ Rate limited, sleeping ${wait_s}s until reset (${reset_str})..."
+                  sleep "$wait_s"
+                else
+                  echo "⚠ Transient error, retrying in ${delay}s..."
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                  [ "$delay" -gt 120 ] && delay=120
+                fi
+                continue
+              fi
+
+              echo "::error::Failed to publish ${label}: non-retryable error"
+              return 1
+            done
+
+            echo "::error::Failed to publish ${label} after ${max_retries} attempts"
+            return 1
+          }
+
+          echo "Effective publish list:"
+          cat /tmp/publish-list.txt
+          echo ""
+          echo "Research version: ${RND_VERSION}"
+          echo ""
+
+          published=0
+          while IFS=$'\t' read -r kind arg; do
+            [ -z "$kind" ] && continue
+            echo "::group::Dry-run ${kind}=${arg}"
+            dry_run_entry "$kind" "$arg"
+            echo "::endgroup::"
+            publish_entry "$kind" "$arg"
+            published=$((published + 1))
+            echo "Waiting 5s for index propagation..."
+            sleep 5
+          done < /tmp/publish-list.txt
+
+          echo ""
+          echo "✓ All ${published} entry/entries published successfully"
