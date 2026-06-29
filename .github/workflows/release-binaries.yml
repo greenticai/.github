@@ -47,10 +47,10 @@ on:
         type: boolean
         default: true
       include-macos-intel:
-        description: "Also build the Intel macOS binary (x86_64-apple-darwin on macos-15-intel). OFF by default to save Actions cost; pass true for a final all-binary release."
+        description: "Build the Intel macOS binary (x86_64-apple-darwin on macos-15-intel). ON by default so stable releases ship an Intel binstall target; pass false to skip it (e.g. cost-sensitive non-stable builds)."
         required: false
         type: boolean
-        default: false
+        default: true
     secrets:
       GHCR_TOKEN:
         description: "Optional PAT for GHCR push; falls back to GITHUB_TOKEN"
@@ -62,9 +62,9 @@ permissions:
 
 jobs:
   # The Intel macOS leg (x86_64-apple-darwin on macos-15-intel — bills ~10x
-  # Linux) is OFF by default; most consumers are on Apple Silicon. Callers pass
-  # `include-macos-intel: true` for a final all-binary release. Every other
-  # target always builds.
+  # Linux) is ON by default so stable releases ship an Intel binstall target.
+  # Pass `include-macos-intel: false` to skip it. Every other target always
+  # builds.
   resolve-matrix:
     name: resolve build matrix
     runs-on: ubuntu-24.04
