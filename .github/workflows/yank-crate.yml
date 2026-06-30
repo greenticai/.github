@@ -42,7 +42,10 @@ jobs:
   yank:
     runs-on: ubuntu-latest
     env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # cargo reads the token from CARGO_REGISTRY_TOKEN; source it from the
+      # dedicated CARGO_YANK_TOKEN secret (a crates.io token WITH yank scope).
+      # The publish token (CARGO_REGISTRY_TOKEN secret) is publish-only and 403s on yank.
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_YANK_TOKEN }}
       SPECS: ${{ inputs.specs }}
       UNDO: ${{ inputs.undo }}
     steps:
