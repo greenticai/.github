@@ -967,3 +967,13 @@ version-track = { from = "0.1", to = "0.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
+
+[repos.greentic-update]
+org = "greenticai"
+variant = "host"
+tier = 5
+publishes = ["greentic-update"]
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
+nightly-codex-enabled = false
