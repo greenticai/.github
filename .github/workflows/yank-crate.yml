@@ -1,0 +1,90 @@
+# Manual crates.io yank / un-yank tool.
+#
+# Yanks (or un-yanks) one or more published crate versions on crates.io using
+# the org CARGO_REGISTRY_TOKEN secret. `cargo yank` needs no repo checkout — it
+# talks to crates.io directly given <crate>@<version> — so this single workflow
+# in greenticai/.github can roll back a bad publish for ANY repo's crate.
+#
+# See runbooks/rollback-bad-publish.md (Scenario A). Yank marks a version
+# "do not use for new resolutions" without deleting bytes; existing Cargo.lock
+# consumers keep working. Un-yank within 24h is possible (set undo=true).
+# Post to #release-alerts before yanking, per the runbook.
+#
+# Dispatch:
+#   gh workflow run yank-crate.yml -R greenticai/.github \
+#     -f specs="greentic-setup@1.2.0 dwbase-core@1.2.0 dwbase-cli@1.2.0"
+#   gh workflow run yank-crate.yml -R greenticai/.github \
+#     -f specs="greentic-setup@1.2.0" -f undo=true
+
+name: Yank crate (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      specs:
+        description: 'Whitespace-separated crate@version specs (e.g. "greentic-setup@1.2.0 dwbase-core@1.2.0")'
+        required: true
+        type: string
+      undo:
+        description: 'Un-yank instead of yank'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yank-crate
+  cancel-in-progress: false
+
+jobs:
+  yank:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      SPECS: ${{ inputs.specs }}
+      UNDO: ${{ inputs.undo }}
+    steps:
+      - name: Yank / un-yank each spec
+        run: |
+          set -uo pipefail
+          action="yank"; [ "$UNDO" = "true" ] && action="un-yank"
+          echo "Action: $action"
+          fail=0
+          for spec in $SPECS; do
+            crate="${spec%@*}"; ver="${spec#*@}"
+            if [ "$crate" = "$spec" ] || [ -z "$crate" ] || [ -z "$ver" ]; then
+              echo "::error::bad spec '$spec' (expected <crate>@<version>)"; fail=1; continue
+            fi
+            echo "::group::cargo yank ($action) $crate@$ver"
+            if [ "$UNDO" = "true" ]; then
+              cargo yank --undo --version "$ver" "$crate" || { echo "::error::un-yank failed for $crate@$ver"; fail=1; }
+            else
+              cargo yank --version "$ver" "$crate" || { echo "::error::yank failed for $crate@$ver"; fail=1; }
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      - name: Verify state on crates.io
+        if: always()
+        run: |
+          set -uo pipefail
+          want="true"; [ "$UNDO" = "true" ] && want="false"
+          rc=0
+          # crates.io updates the index near-instantly, but allow brief propagation.
+          sleep 5
+          for spec in $SPECS; do
+            crate="${spec%@*}"; ver="${spec#*@}"
+            [ "$crate" = "$spec" ] && continue
+            state=$(curl -s -H "User-Agent: greentic-yank-verify (release-eng)" \
+              "https://crates.io/api/v1/crates/$crate/$ver" \
+              | python3 -c "import sys,json; v=json.load(sys.stdin).get('version'); print(v['yanked'] if v else 'absent')" 2>/dev/null || echo "fetch-error")
+            if [ "$state" = "$want" ]; then
+              echo "OK   $crate@$ver yanked=$state"
+            else
+              echo "::error::$crate@$ver yanked=$state (wanted $want)"; rc=1
+            fi
+          done
+          exit $rc
