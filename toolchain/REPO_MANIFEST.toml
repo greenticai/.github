@@ -185,6 +185,16 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
 
+[repos.greentic-updates-server]
+org = "greentic-biz"
+variant = "host"
+tier = 0
+publishes = []  # service binary, deployed via Docker — not a crates.io crate
+version-track = { from = "0.1", to = "0.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
+nightly-codex-enabled = false
+
 [repos.serde-yaml-gtc]
 org = "greenticai"
 variant = "host"
