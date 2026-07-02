@@ -262,7 +262,7 @@ org = "greenticai"
 variant = "host"
 tier = 1
 publishes = ["greentic-types-macros", "greentic-types"]
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.0", to = "1.1" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
@@ -738,7 +738,7 @@ org = "greentic-biz"
 variant = "host"
 tier = 7
 publishes = []
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.0", to = "1.1" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
@@ -870,7 +870,7 @@ org = "greenticai"
 variant = "host"
 tier = 9
 publishes = []  # demo bundles, not published
-version-track = { from = "0.4", to = "0.5" }
+version-track = { from = "1.0", to = "1.1" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
