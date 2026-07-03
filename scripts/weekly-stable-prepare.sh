@@ -86,7 +86,8 @@ for tier, org, name, crates, auto_merge in entries:
 }
 
 # ── Tag detection ────────────────────────────────────────────────
-# Returns the latest stable release tag (v*.*.* without pre-release suffix)
+# Returns the latest stable release tag (v*.*.* without pre-release suffix
+# and without dev-lane run-id patch numbers; see the grep filter below)
 # that is REACHABLE from main. Tags on abandoned side-branches must be
 # skipped — they can carry higher version numbers than main but are not
 # ancestors of it, so comparing against them produces a nonsense changelog
@@ -110,8 +111,15 @@ get_last_stable_tag() {
       return 0
     fi
   done < <(
+    # Exclude dev-lane run-id tags. The binary-bifurcation dev pipeline tags
+    # releases vM.m.{RUN_ID}, where {RUN_ID} is a GitHub Actions run id (10+
+    # digits, e.g. v1.1.28533459463). After a GA promotion those tags become
+    # reachable from main and — sorting highest — would masquerade as the
+    # latest stable, poisoning the version floor and rejecting legitimate
+    # patch cuts. Real semver patch numbers are small, so cap the patch at 4
+    # digits (<=9999): keeps every genuine stable tag, drops every run-id.
     gh api "repos/$repo/tags" --paginate --jq '.[].name' 2>/dev/null \
-      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]{1,4}$' \
       | sort -Vr
   )
 }
