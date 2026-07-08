@@ -302,7 +302,13 @@ class Bumper:
 
             if actual_package in SKIP_CRATES:
                 continue
-            if not _is_greentic(actual_package):
+            # Intra-workspace path deps carry a `version` req that must track
+            # the workspace version, even when the crate name doesn't start
+            # with `greentic-` (e.g. `dwbase-core`, `sorla-provider-pack`,
+            # `tenant-storage`).  Leaving them behind pins the sibling to the
+            # *old* minor, and the bumped workspace no longer resolves.
+            is_local_path_dep = isinstance(spec, dict) and "path" in spec
+            if not (_is_greentic(actual_package) or is_local_path_dep):
                 continue
 
             if isinstance(spec, str):
