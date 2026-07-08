@@ -712,6 +712,40 @@ def test_stable_cut_from_pre_release_strips_suffix(root: Path) -> None:
     )
 
 
+def test_local_path_dep_without_greentic_prefix_is_bumped(root: Path) -> None:
+    """Intra-workspace path deps track the workspace version even when the
+    crate name isn't greentic-prefixed (`dwbase-core`, `tenant-storage`, …).
+
+    Leaving them pinned to the old minor makes the bumped workspace
+    unresolvable — the trap that broke greentic-tenant-manager on the
+    research lane.
+    """
+    _write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = []\n\n"
+        "[workspace.dependencies]\n"
+        'dwbase-core = { path = "crates/dwbase-core", version = ">=1.1.1-dev, <1.2.0-0" }\n'
+        'tenant-storage = { path = "crates/tenant-storage", version = "1.1" }\n'
+        'rand = { version = "1.1" }\n',
+    )
+    _run_with(root, "--from", "1.1", "--to", "1.2", "--pre-release")
+
+    deps = _load(root, "Cargo.toml")["workspace"]["dependencies"]
+    _assert(
+        deps["dwbase-core"]["version"] == ">=1.2.0-dev, <1.3.0-0",
+        f"local path dep (range form) not bumped: {deps['dwbase-core']}",
+    )
+    _assert(
+        deps["tenant-storage"]["version"] == ">=1.2.0-dev, <1.3.0-0",
+        f"local path dep (prefix form) not bumped: {deps['tenant-storage']}",
+    )
+    _assert(
+        deps["rand"]["version"] == "1.1",
+        f"registry dep without path was bumped: {deps['rand']}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -738,6 +772,7 @@ def main() -> int:
         test_pre_release_loose_lower_bound_is_bumped,
         test_pre_release_loose_range_does_not_match_unrelated_minor,
         test_stable_cut_from_pre_release_strips_suffix,
+        test_local_path_dep_without_greentic_prefix_is_bumped,
     ]
     failed = 0
     for fn in tests:
