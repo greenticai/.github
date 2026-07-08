@@ -267,17 +267,30 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — reusing (idempotent)"
           else
+            # A repo with several binary crates calls this workflow once per
+            # crate, and every call reaches this step for the SAME tag. The
+            # view/create pair above is therefore a TOCTOU: the loser of the
+            # race sees "no release", then gets HTTP 422 Release.tag_name
+            # already exists. Treat that 422 as the success it is.
+            #
             # Dev releases are prerelease + not latest so they don't
             # displace stable release visibility on the repo page. Tag
             # is created at github.sha (the develop commit that triggered
             # this workflow) so binstall downloads correspond exactly to
             # the code state that produced the published crate.
-            gh release create "$tag" \
+            if ! gh release create "$tag" \
               --target "$SHA" \
               --title "$tag (dev build)" \
               --notes "Automated dev-lane build from develop. Paired with \`$(gh repo view --json name -q .name)-dev@${VERSION}\` on crates.io." \
               --prerelease \
-              --latest=false
+              --latest=false 2>"$RUNNER_TEMP/release-create.err"; then
+              cat "$RUNNER_TEMP/release-create.err" >&2
+              if grep -qi 'already exists' "$RUNNER_TEMP/release-create.err"; then
+                echo "Release $tag was created concurrently by a sibling job — reusing"
+              else
+                exit 1
+              fi
+            fi
           fi
 
       - name: Upload archives to release
