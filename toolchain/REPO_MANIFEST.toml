@@ -771,7 +771,12 @@ nightly-codex-enabled = false
 org = "greenticai"
 variant = "wasm"
 tier = 7
-publishes = ["runner-core", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
+# Order is topological. `aw-event-bridge` and `greentic-aw-runtime` were missing here
+# until 2026-07-08: the repo's own crates-publish.yml lists all six, but that workflow
+# only fires on `runnercrates-v*`, while a `v*` tag runs the embedded publish below,
+# which reads THIS list. Result: greentic-runner-host 1.1.6 shipped resolving
+# greentic-aw-runtime 1.1.5 (range dep), silently reverting an async-nats security bump.
+publishes = ["runner-core", "aw-event-bridge", "greentic-aw-runtime", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-runner"]
 dual-role-binary-crates = ["greentic-runner"]
