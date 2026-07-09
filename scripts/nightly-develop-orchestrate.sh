@@ -4,6 +4,7 @@
 # Dispatches dev-publish.yml across repos in tier order (0→9).
 # Repos within a tier are dispatched in parallel, then waited on.
 # Change-aware: skips repos with no source or upstream changes.
+# Flake-tolerant: re-runs a downstream run whose jobs GitHub never scheduled.
 #
 # Environment:
 #   GREENTIC_CI_APP_ID           — App ID for token minting (required in CI)
@@ -36,6 +37,8 @@ MAX_WAIT=7200       # max seconds to wait per tier (2 hours)
 DISPATCH_DETECT=5   # seconds between dispatch detection polls
 DISPATCH_TIMEOUT=24 # max polls to detect dispatched run (24*5s = 2min)
 TOKEN_REFRESH_SEC=2700  # re-mint at 45 min — leaves 15 min headroom on 1h TTL
+UNSCHEDULED_RETRIES=1   # re-runs allowed per run when GitHub never schedules a job
+UNSCHEDULED_GRACE=1800  # seconds added to a tier's wait budget per re-run
 
 FORCE="${INPUT_FORCE:-false}"
 TIER_FILTER="${INPUT_TIER:-}"
@@ -257,13 +260,58 @@ dispatch() {
   return 1
 }
 
+# ── Unscheduled-job detection ────────────────────────────────────
+# GitHub occasionally fails to hand a queued job to a hosted runner ("The job
+# was not acquired by Runner of type hosted even after multiple attempts").
+# Such a job is marked `cancelled` with no runner and no steps, and the run
+# concludes `failure`. Nothing executed, so nothing was published — re-running
+# it is safe.
+#
+# Returns 0 only when *every* non-success job in the latest attempt never
+# started, so a run that also contains a genuine failure is never mistaken for
+# a flake. Callers additionally gate on a run-level `failure` conclusion; a
+# human-cancelled run concludes `cancelled` and is therefore never re-run.
+is_unscheduled_flake() {
+  local repo="$1"
+  local run_id="$2"
+
+  use_token_for_repo "$repo" || return 1
+
+  gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" --jq '
+    [ .jobs[]
+      | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped")
+    ] as $bad
+    | ($bad | length) > 0
+      and ($bad | all(
+            .conclusion == "cancelled"
+            and ((.runner_id // 0) == 0)
+            and (((.steps // []) | length) == 0)
+          ))
+  ' 2>/dev/null | grep -qx true
+}
+
+# Re-run only the jobs that did not succeed. Successful jobs — including the
+# version stamp and the binary builds — are reused, so the run ID and therefore
+# the stamped dev version stay the same.
+rerun_failed_jobs() {
+  local repo="$1"
+  local run_id="$2"
+
+  use_token_for_repo "$repo" || return 1
+
+  gh run rerun "$run_id" --repo "$repo" --failed >/dev/null 2>&1
+}
+
 # ── Wait for multiple runs ───────────────────────────────────────
 # Args: "org/repo:run_id" entries. Returns 0 if all succeeded.
 wait_for_all() {
   local -a entries=("$@")
   local count=${#entries[@]}
   local elapsed=0
+  local max_wait=$MAX_WAIT
   local -A done_map=()
+  local -A retry_count=()
+  local -A retry_attempt=()
   local any_failed=false
 
   while true; do
@@ -286,16 +334,17 @@ wait_for_all() {
 
       local result
       if ! result=$(gh run view "$run_id" --repo "$repo" \
-          --json status,conclusion \
-          --jq '[.status, .conclusion // ""] | @tsv' 2>&1); then
+          --json status,conclusion,attempt \
+          --jq '[.status, .conclusion // "", (.attempt | tostring)] | @tsv' 2>&1); then
         warn "gh run view failed for $name (run $run_id): $result"
         ((pending++)) || true
         continue
       fi
 
-      local status conclusion
+      local status conclusion attempt
       status=$(echo "$result" | cut -f1)
       conclusion=$(echo "$result" | cut -f2)
+      attempt=$(echo "$result" | cut -f3)
 
       if [[ -z "$status" ]]; then
         warn "Empty status for $name (run $run_id), raw: '$result'"
@@ -304,10 +353,30 @@ wait_for_all() {
       fi
 
       if [[ "$status" == "completed" ]]; then
-        done_map["$entry"]=1
         if [[ "$conclusion" == "success" ]]; then
+          done_map["$entry"]=1
           log "    ✓ $name (run $run_id)"
+        elif [[ -n "${retry_attempt[$entry]:-}" && "$attempt" -le "${retry_attempt[$entry]}" ]]; then
+          # Re-run already issued; GitHub has not registered the new attempt yet.
+          ((pending++)) || true
+        elif [[ "$conclusion" == "failure" \
+                && "${retry_count[$entry]:-0}" -lt "$UNSCHEDULED_RETRIES" ]] \
+             && is_unscheduled_flake "$repo" "$run_id"; then
+          if rerun_failed_jobs "$repo" "$run_id"; then
+            retry_count["$entry"]=$(( ${retry_count[$entry]:-0} + 1 ))
+            retry_attempt["$entry"]=$attempt
+            max_wait=$((max_wait + UNSCHEDULED_GRACE))
+            log "    ↻ $name — no runner acquired; re-running failed jobs (run $run_id)"
+            warn "$name dev-publish had jobs GitHub never scheduled — re-running (attempt $attempt)"
+            ((pending++)) || true
+          else
+            done_map["$entry"]=1
+            log "    ✗ $name — could not re-run unscheduled jobs (run $run_id)"
+            err "$name dev-publish could not be re-run — https://github.com/$repo/actions/runs/$run_id"
+            any_failed=true
+          fi
         else
+          done_map["$entry"]=1
           log "    ✗ $name — $conclusion (run $run_id)"
           err "$name dev-publish $conclusion — https://github.com/$repo/actions/runs/$run_id"
           any_failed=true
@@ -319,7 +388,7 @@ wait_for_all() {
 
     [[ "$pending" -eq 0 ]] && break
 
-    if [[ "$elapsed" -ge "$MAX_WAIT" ]]; then
+    if [[ "$elapsed" -ge "$max_wait" ]]; then
       err "Timed out waiting for tier runs (${elapsed}s)"
       for entry in "${entries[@]}"; do
         [[ -z "${done_map[$entry]:-}" ]] && {
