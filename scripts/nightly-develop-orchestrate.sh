@@ -278,15 +278,21 @@ is_unscheduled_flake() {
   use_token_for_repo "$repo" || return 1
 
   gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" --jq '
-    [ .jobs[]
-      | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped")
-    ] as $bad
-    | ($bad | length) > 0
-      and ($bad | all(
-            .conclusion == "cancelled"
-            and ((.runner_id // 0) == 0)
-            and (((.steps // []) | length) == 0)
-          ))
+    # A truncated page would hide a genuine failure from all() below, so a run
+    # with more jobs than this page carries is never treated as a flake.
+    (.total_count // (.jobs | length)) as $total
+    | if $total > (.jobs | length) then false
+      else
+        [ .jobs[]
+          | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped")
+        ] as $bad
+        | ($bad | length) > 0
+          and ($bad | all(
+                .conclusion == "cancelled"
+                and ((.runner_id // 0) == 0)
+                and (((.steps // []) | length) == 0)
+              ))
+      end
   ' 2>/dev/null | grep -qx true
 }
 
