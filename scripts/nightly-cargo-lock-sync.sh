@@ -10,10 +10,13 @@
 #      Dev versions ({M.m.RUN_ID}) published earlier in this run resolve from
 #      crates.io with no custom registry setup.
 #   3. If Cargo.lock changed: force-push to a long-lived bot branch
-#      (`chore/nightly-cargo-update`), create a PR if none exists, and enable
-#      auto-merge.
-#   4. If auto-merge cannot be enabled (conflict / failing CI): leave PR open
-#      for manual resolution.
+#      (`chore/nightly-cargo-update`), create a PR if none exists, wait for
+#      GitHub to compute mergeability, and enable auto-merge.
+#   4. If the branch truly conflicts, or CI is failing: leave PR open for
+#      manual resolution.
+#   5. If Cargo.lock did NOT change, the repo is at the `cargo update` fixpoint.
+#      Any bot PR still open was raised against an older develop and can only
+#      rot, so close it.
 #
 # Env expected from the calling workflow:
 #   GH_TOKEN_GREENTICAI    — App token scoped to greenticai org installation
@@ -24,8 +27,15 @@ set -uo pipefail
 
 MANIFEST="toolchain/REPO_MANIFEST.toml"
 BRANCH="chore/nightly-cargo-update"
+BOT_AUTHOR="greentic-ci[bot]"
 WORK_DIR="$(mktemp -d -t cargo-lock-sync-XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+# GitHub computes `mergeable` asynchronously. For a few seconds after a
+# force-push it answers UNKNOWN, and every merge attempt in that window fails.
+# Overridable so the regression test can drive the loop without waiting.
+MERGEABLE_POLL_TRIES="${MERGEABLE_POLL_TRIES:-10}"
+MERGEABLE_POLL_SEC="${MERGEABLE_POLL_SEC:-3}"
 
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
@@ -81,6 +91,86 @@ for name, entry in m.get('repos', {}).items():
     org = entry.get('org', 'greenticai')
     print(f'{org}/{name}')
 "
+}
+
+# ── Block until GitHub has decided whether the PR merges cleanly.
+# Echoes MERGEABLE, CONFLICTING, or UNKNOWN if it never settles. Merging while
+# GitHub still answers UNKNOWN fails, and that failure used to be reported as
+# "conflict" — the branch was fine, we just asked too early.
+wait_for_mergeable() {
+  local full="$1"
+  local pr="$2"
+  local i state
+
+  for (( i = 0; i < MERGEABLE_POLL_TRIES; i++ )); do
+    state=$(gh pr view "$pr" --repo "$full" --json mergeable --jq '.mergeable' 2>/dev/null || true)
+    case "$state" in
+      MERGEABLE|CONFLICTING) echo "$state"; return 0 ;;
+    esac
+    sleep "$MERGEABLE_POLL_SEC"
+  done
+
+  echo "UNKNOWN"
+}
+
+# ── Close a bot PR that the fixpoint has stranded.
+# `cargo update` yielding nothing means develop already resolves to versions at
+# least as new as anything this branch pins, so the PR can only ever roll the
+# lockfile backwards. It also never gets rebuilt: process_repo's `git checkout -B
+# $BRANCH origin/develop` sits below its `nochange` return, so a repo that has
+# reached the fixpoint never refreshes the branch again. Left alone the PR drifts
+# behind develop until it is permanently CONFLICTING.
+#
+# Returns 0 only when a PR was actually closed. Sets out_pr_url either way.
+close_stale_bot_pr() {
+  local full="$1"
+  local name="$2"
+  local pr non_lock foreign
+
+  pr=$(gh pr list --repo "$full" --head "$BRANCH" --state open \
+        --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  [[ -z "$pr" ]] && return 1
+  out_pr_url="https://github.com/${full}/pull/${pr}"
+
+  # A red-CI lock PR is repaired by committing the source fix onto this very
+  # branch. Closing that would throw the fix away, so anything beyond a
+  # bot-authored Cargo.lock edit is left for a human. Both probes fail closed:
+  # an API error yields 1, which refuses the close.
+  #
+  # `gh --jq` takes the program and nothing else — it has no --arg — so the bot
+  # name is interpolated. The explicit empty-authors test matters: `any` over an
+  # empty list is false, so an authorless commit would otherwise read as the bot's.
+  local commits_filter="[.commits[] | select((.authors | length) == 0 or any(.authors[]; .name != \"$BOT_AUTHOR\"))] | length"
+
+  non_lock=$(gh pr view "$pr" --repo "$full" --json files \
+              --jq '[.files[].path | select(endswith("Cargo.lock") | not)] | length' 2>/dev/null || echo 1)
+  foreign=$(gh pr view "$pr" --repo "$full" --json commits \
+              --jq "$commits_filter" 2>/dev/null || echo 1)
+
+  if [[ "$non_lock" != "0" || "$foreign" != "0" ]]; then
+    warn "$name lock PR #$pr carries non-bot changes (files=$non_lock commits=$foreign) — leaving open"
+    return 1
+  fi
+
+  gh pr comment "$pr" --repo "$full" --body-file - >/dev/null 2>&1 <<EOF
+Closing as obsolete.
+
+\`cargo update\` against \`develop\` no longer changes \`Cargo.lock\`, so \`develop\` already
+resolves to versions at least as new as the ones this branch pins. Merging it would roll the
+lockfile backwards.
+
+This PR could not refresh itself: \`nightly-cargo-lock-sync.sh\` rebuilds \`$BRANCH\` from
+\`develop\` only when the lock actually changes, so a PR left open at the fixpoint drifts behind
+\`develop\` until it conflicts.
+
+The nightly will open a fresh PR the next time \`cargo update\` produces a real delta.
+EOF
+
+  if ! gh pr close "$pr" --repo "$full" >/dev/null 2>&1; then
+    warn "$name could not close stale lock PR #$pr"
+    return 1
+  fi
+  return 0
 }
 
 # ── Process one repo. Sets out_status and out_pr_url.
@@ -191,7 +281,11 @@ except Exception:
   after_hash=$(sha256sum "$dir/Cargo.lock" | awk '{print $1}')
 
   if [[ "$before_hash" == "$after_hash" ]]; then
-    out_status="nochange"
+    if close_stale_bot_pr "$full" "$name"; then
+      out_status="closed"
+    else
+      out_status="nochange"
+    fi
     return 0
   fi
 
@@ -271,14 +365,24 @@ EOF
     out_pr_url="$create_out"
   fi
 
+  # Settle mergeability before touching the merge API, otherwise a MERGEABLE
+  # branch reads as unmergeable purely because we asked one second too early.
+  local mergeable
+  mergeable=$(wait_for_mergeable "$full" "$out_pr_url")
+  if [[ "$mergeable" == "CONFLICTING" ]]; then
+    out_status="conflict"
+    return 0
+  fi
+
   # Try auto-merge first; fall back to direct merge (UNSTABLE-but-mergeable
-  # case). If neither works, leave PR open for manual resolution.
+  # case). Neither working now means CI is red or still running, not that the
+  # branch conflicts — those need very different follow-up, so name them apart.
   if gh pr merge --repo "$full" "$out_pr_url" --auto --squash 2>/dev/null; then
     out_status="updated"
   elif gh pr merge --repo "$full" "$out_pr_url" --squash 2>/dev/null; then
     out_status="merged"
   else
-    out_status="conflict"
+    out_status="blocked"
   fi
   return 0
 }
@@ -295,10 +399,13 @@ log "Greentic crates in scope: $crate_count"
 c_updated=0
 c_merged=0
 c_conflict=0
+c_blocked=0
+c_closed=0
 c_nochange=0
 c_skipped=0
 c_failed=0
 conflict_urls=()
+blocked_urls=()
 updated_urls=()
 failed_repos=()
 
@@ -314,6 +421,8 @@ while IFS= read -r full; do
     updated)  ((c_updated++))  || true; updated_urls+=("$name: $out_pr_url") ;;
     merged)   ((c_merged++))   || true ;;
     conflict) ((c_conflict++)) || true; conflict_urls+=("$name: $out_pr_url") ;;
+    blocked)  ((c_blocked++))  || true; blocked_urls+=("$name: $out_pr_url") ;;
+    closed)   ((c_closed++))   || true ;;
     nochange) ((c_nochange++)) || true ;;
     skipped)  ((c_skipped++))  || true ;;
     failed)   ((c_failed++))   || true; failed_repos+=("$name") ;;
@@ -329,6 +438,8 @@ log "━━━ Summary ━━━"
 log "  Updated (auto-merge queued): $c_updated"
 log "  Merged immediately:          $c_merged"
 log "  Conflict (open PR):          $c_conflict"
+log "  Blocked on CI (open PR):     $c_blocked"
+log "  Closed (stale bot PR):       $c_closed"
 log "  No change:                   $c_nochange"
 log "  Skipped:                     $c_skipped"
 log "  Failed:                      $c_failed"
@@ -342,6 +453,8 @@ log "  Failed:                      $c_failed"
   echo "| Updated (PR queued) | $c_updated |"
   echo "| Merged immediately | $c_merged |"
   echo "| Conflict (open PR) | $c_conflict |"
+  echo "| Blocked on CI (open PR) | $c_blocked |"
+  echo "| Closed (stale bot PR) | $c_closed |"
   echo "| No change | $c_nochange |"
   echo "| Skipped | $c_skipped |"
   echo "| Failed | $c_failed |"
@@ -350,6 +463,11 @@ log "  Failed:                      $c_failed"
     echo ""
     echo "### Conflicts awaiting manual resolution"
     for u in "${conflict_urls[@]}"; do echo "- $u"; done
+  fi
+  if [[ ${#blocked_urls[@]} -gt 0 ]]; then
+    echo ""
+    echo "### Blocked on CI"
+    for u in "${blocked_urls[@]}"; do echo "- $u"; done
   fi
   if [[ ${#updated_urls[@]} -gt 0 ]]; then
     echo ""
@@ -368,6 +486,8 @@ summary_parts=()
 [[ "$c_updated"  -gt 0 ]] && summary_parts+=("$c_updated lock-PR(s) queued")
 [[ "$c_merged"   -gt 0 ]] && summary_parts+=("$c_merged lock-PR(s) merged")
 [[ "$c_conflict" -gt 0 ]] && summary_parts+=("$c_conflict conflict(s) open")
+[[ "$c_blocked"  -gt 0 ]] && summary_parts+=("$c_blocked blocked on CI")
+[[ "$c_closed"   -gt 0 ]] && summary_parts+=("$c_closed stale PR(s) closed")
 [[ "$c_failed"   -gt 0 ]] && summary_parts+=("$c_failed failed")
 joined=""
 if [[ ${#summary_parts[@]} -gt 0 ]]; then
@@ -375,6 +495,6 @@ if [[ ${#summary_parts[@]} -gt 0 ]]; then
 fi
 echo "cargo_lock_summary=${joined}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
-# Fail the job only on hard errors — not on conflict PRs (those are expected
-# and handled via manual resolution).
+# Fail the job only on hard errors — not on conflict or CI-blocked PRs (those
+# are expected and handled via manual resolution).
 [[ "$c_failed" -eq 0 ]]
