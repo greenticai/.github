@@ -59,7 +59,9 @@ jobs:
     needs: [orchestrate]
     if: needs.orchestrate.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Repo loop (~10 min) + the reap phase that holds the job open while it
+    # merges lock PRs as their CI turns green (REAPER_MAX_SEC, 35 min).
+    timeout-minutes: 55
     outputs:
       summary: ${{ steps.sync.outputs.cargo_lock_summary }}
     steps:
