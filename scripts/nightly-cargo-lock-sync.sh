@@ -11,7 +11,8 @@
 #      crates.io with no custom registry setup.
 #   3. If Cargo.lock changed: force-push to a long-lived bot branch
 #      (`chore/nightly-cargo-update`), create a PR if none exists, wait for
-#      GitHub to compute mergeability, and enable auto-merge.
+#      GitHub to compute mergeability, and park the PR. A reap phase after
+#      the repo loop merges each parked PR once its CI finishes green.
 #   4. If the branch truly conflicts, or CI is failing: leave PR open for
 #      manual resolution.
 #   5. If Cargo.lock did NOT change, the repo is at the `cargo update` fixpoint.
@@ -36,6 +37,12 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # Overridable so the regression test can drive the loop without waiting.
 MERGEABLE_POLL_TRIES="${MERGEABLE_POLL_TRIES:-10}"
 MERGEABLE_POLL_SEC="${MERGEABLE_POLL_SEC:-3}"
+
+# The reap phase re-polls parked PRs until their checks finish, bounded so the
+# job stays inside its timeout and the 1-hour App-token TTL. Overridable so a
+# test can drive the loop without waiting.
+REAPER_POLL_SEC="${REAPER_POLL_SEC:-90}"
+REAPER_MAX_SEC="${REAPER_MAX_SEC:-2100}"
 
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
@@ -344,8 +351,9 @@ except Exception:
 Automated nightly \`cargo update\` — refreshes \`Cargo.lock\` with the latest
 Greentic crate versions published to CodeArtifact earlier in this run.
 
-If auto-merge is queued, this PR will merge once CI passes. If it sits
-unmerged, a conflict or failing CI is waiting for manual attention.
+The nightly merges this PR automatically once its CI passes. If it sits
+unmerged, CI on it is red, the branch conflicts with develop, or CI was still
+running when the nightly's merge window closed — the next nightly refreshes it.
 
 Branch is long-lived — subsequent nightlies force-push to it.
 
@@ -374,17 +382,103 @@ EOF
     return 0
   fi
 
-  # Try auto-merge first; fall back to direct merge (UNSTABLE-but-mergeable
-  # case). Neither working now means CI is red or still running, not that the
-  # branch conflicts — those need very different follow-up, so name them apart.
-  if gh pr merge --repo "$full" "$out_pr_url" --auto --squash 2>/dev/null; then
-    out_status="updated"
-  elif gh pr merge --repo "$full" "$out_pr_url" --squash 2>/dev/null; then
-    out_status="merged"
-  else
-    out_status="blocked"
-  fi
+  # Never touch the merge API at push time. No repo in the fleet has required
+  # status checks on develop (free-plan private repos can't carry branch
+  # protection, and the public ones have none configured), so `gh pr merge
+  # --auto` doesn't queue anything — where it "succeeds" it merges the PR
+  # immediately, seconds after the push, before CI has looked at the new lock;
+  # where it fails the PR sits open forever with nobody to merge it once CI
+  # goes green. Park the PR instead; reap_pending merges it after its checks
+  # actually finish.
+  out_status="pending"
   return 0
+}
+
+# ── Phase 2: merge parked PRs as their CI turns green.
+# Consumes/refills the global pending_prs array ("org/name|url" entries) and
+# appends to the merged/red counters and url lists. Bounded by REAPER_MAX_SEC.
+#
+# statusCheckRollup mixes two shapes: CheckRun rows carry status/conclusion,
+# commit-status rows carry state. A row counts as pending while its CheckRun
+# status is anything but COMPLETED or its state is PENDING/EXPECTED; it counts
+# as failed on a red conclusion or state. SKIPPED and NEUTRAL are fine.
+reap_pending() {
+  local deadline=$(( $(date +%s) + REAPER_MAX_SEC ))
+  local round=0
+
+  while (( ${#pending_prs[@]} > 0 )) && (( $(date +%s) < deadline )); do
+    round=$(( round + 1 ))
+    local still=()
+    local entry full name url json state mergeable n_pending n_failed n_checks
+
+    for entry in "${pending_prs[@]}"; do
+      full="${entry%%|*}"
+      url="${entry##*|}"
+      name="${full##*/}"
+
+      local GH_TOKEN
+      GH_TOKEN="$(token_for_org "${full%%/*}")" || { still+=("$entry"); continue; }
+      export GH_TOKEN
+
+      json=$(gh pr view "$url" --json state,mergeable,statusCheckRollup 2>/dev/null) \
+        || { still+=("$entry"); continue; }
+
+      state=$(jq -r '.state' <<<"$json")
+      if [[ "$state" != "OPEN" ]]; then
+        # Someone else merged or closed it under us — count it resolved.
+        ((c_merged++)) || true
+        continue
+      fi
+
+      mergeable=$(jq -r '.mergeable' <<<"$json")
+      n_checks=$(jq '.statusCheckRollup | length' <<<"$json")
+      n_pending=$(jq '[.statusCheckRollup[]? | select(
+          ((.status // "") as $s | ($s != "" and $s != "COMPLETED"))
+          or ((.state // "") | IN("PENDING","EXPECTED"))
+        )] | length' <<<"$json")
+      n_failed=$(jq '[.statusCheckRollup[]? | select(
+          ((.conclusion // "") | IN("FAILURE","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STARTUP_FAILURE"))
+          or ((.state // "") | IN("FAILURE","ERROR"))
+        )] | length' <<<"$json")
+
+      if [[ "$mergeable" == "CONFLICTING" ]]; then
+        ((c_conflict++)) || true
+        conflict_urls+=("$name: $url")
+        continue
+      fi
+      if (( n_failed > 0 )); then
+        ((c_ci_red++)) || true
+        red_urls+=("$name: $url")
+        continue
+      fi
+      # An empty rollup in round 1 usually means GitHub hasn't created the
+      # check suites for the fresh push yet, not that the repo has no CI —
+      # give it one more round before trusting it.
+      if (( n_pending > 0 )) || [[ "$mergeable" == "UNKNOWN" ]] \
+         || (( n_checks == 0 && round == 1 )); then
+        still+=("$entry")
+        continue
+      fi
+
+      if gh pr merge --repo "$full" "$url" --squash 2>/dev/null; then
+        ((c_merged++)) || true
+        log "  ✓ merged after green CI: $name — $url"
+      else
+        still+=("$entry")
+      fi
+    done
+
+    pending_prs=()
+    if (( ${#still[@]} > 0 )); then
+      pending_prs=("${still[@]}")
+      if (( $(date +%s) + REAPER_POLL_SEC < deadline )); then
+        log "  … ${#pending_prs[@]} lock PR(s) still on CI, next poll in ${REAPER_POLL_SEC}s"
+        sleep "$REAPER_POLL_SEC"
+      else
+        break
+      fi
+    fi
+  done
 }
 
 # ── Pre-compute shared state
@@ -396,18 +490,19 @@ fi
 crate_count=$(echo "$GREENTIC_CRATES" | wc -l)
 log "Greentic crates in scope: $crate_count"
 
-c_updated=0
 c_merged=0
 c_conflict=0
-c_blocked=0
+c_ci_red=0
+c_pending=0
 c_closed=0
 c_nochange=0
 c_skipped=0
 c_failed=0
 conflict_urls=()
-blocked_urls=()
-updated_urls=()
+red_urls=()
+pending_urls=()
 failed_repos=()
+pending_prs=()
 
 log ""
 log "━━━ Cargo.lock sync ━━━"
@@ -418,10 +513,8 @@ while IFS= read -r full; do
   echo "::group::$name"
   process_repo "$full"
   case "$out_status" in
-    updated)  ((c_updated++))  || true; updated_urls+=("$name: $out_pr_url") ;;
-    merged)   ((c_merged++))   || true ;;
+    pending)  pending_prs+=("$full|$out_pr_url") ;;
     conflict) ((c_conflict++)) || true; conflict_urls+=("$name: $out_pr_url") ;;
-    blocked)  ((c_blocked++))  || true; blocked_urls+=("$name: $out_pr_url") ;;
     closed)   ((c_closed++))   || true ;;
     nochange) ((c_nochange++)) || true ;;
     skipped)  ((c_skipped++))  || true ;;
@@ -432,13 +525,26 @@ while IFS= read -r full; do
   echo "::endgroup::"
 done < <(list_target_repos)
 
+# ── Phase 2: merge parked PRs once their CI is green ─────────────
+if [[ ${#pending_prs[@]} -gt 0 ]]; then
+  log ""
+  log "━━━ Merging lock PRs as CI passes (${#pending_prs[@]} parked) ━━━"
+  reap_pending
+fi
+# Whatever survived the reap window stays open; the next nightly refreshes it.
+c_pending=${#pending_prs[@]}
+for entry in "${pending_prs[@]}"; do
+  full="${entry%%|*}"
+  pending_urls+=("${full##*/}: ${entry##*|}")
+done
+
 # ── Summary ──────────────────────────────────────────────────────
 log ""
 log "━━━ Summary ━━━"
-log "  Updated (auto-merge queued): $c_updated"
-log "  Merged immediately:          $c_merged"
+log "  Merged after green CI:       $c_merged"
 log "  Conflict (open PR):          $c_conflict"
-log "  Blocked on CI (open PR):     $c_blocked"
+log "  CI red (open PR):            $c_ci_red"
+log "  Still on CI at window close: $c_pending"
 log "  Closed (stale bot PR):       $c_closed"
 log "  No change:                   $c_nochange"
 log "  Skipped:                     $c_skipped"
@@ -450,10 +556,10 @@ log "  Failed:                      $c_failed"
   echo ""
   echo "| Status | Count |"
   echo "|--------|-------|"
-  echo "| Updated (PR queued) | $c_updated |"
-  echo "| Merged immediately | $c_merged |"
+  echo "| Merged after green CI | $c_merged |"
   echo "| Conflict (open PR) | $c_conflict |"
-  echo "| Blocked on CI (open PR) | $c_blocked |"
+  echo "| CI red (open PR) | $c_ci_red |"
+  echo "| Still on CI at window close | $c_pending |"
   echo "| Closed (stale bot PR) | $c_closed |"
   echo "| No change | $c_nochange |"
   echo "| Skipped | $c_skipped |"
@@ -464,15 +570,15 @@ log "  Failed:                      $c_failed"
     echo "### Conflicts awaiting manual resolution"
     for u in "${conflict_urls[@]}"; do echo "- $u"; done
   fi
-  if [[ ${#blocked_urls[@]} -gt 0 ]]; then
+  if [[ ${#red_urls[@]} -gt 0 ]]; then
     echo ""
-    echo "### Blocked on CI"
-    for u in "${blocked_urls[@]}"; do echo "- $u"; done
+    echo "### CI red — the lock exposes a real breakage, fix goes on the bot branch"
+    for u in "${red_urls[@]}"; do echo "- $u"; done
   fi
-  if [[ ${#updated_urls[@]} -gt 0 ]]; then
+  if [[ ${#pending_urls[@]} -gt 0 ]]; then
     echo ""
-    echo "### PRs with auto-merge queued"
-    for u in "${updated_urls[@]}"; do echo "- $u"; done
+    echo "### Still on CI when the merge window closed"
+    for u in "${pending_urls[@]}"; do echo "- $u"; done
   fi
   if [[ ${#failed_repos[@]} -gt 0 ]]; then
     echo ""
@@ -483,10 +589,10 @@ log "  Failed:                      $c_failed"
 
 # Extension line for the Slack summary
 summary_parts=()
-[[ "$c_updated"  -gt 0 ]] && summary_parts+=("$c_updated lock-PR(s) queued")
 [[ "$c_merged"   -gt 0 ]] && summary_parts+=("$c_merged lock-PR(s) merged")
 [[ "$c_conflict" -gt 0 ]] && summary_parts+=("$c_conflict conflict(s) open")
-[[ "$c_blocked"  -gt 0 ]] && summary_parts+=("$c_blocked blocked on CI")
+[[ "$c_ci_red"   -gt 0 ]] && summary_parts+=("$c_ci_red red-CI PR(s) open")
+[[ "$c_pending"  -gt 0 ]] && summary_parts+=("$c_pending still on CI")
 [[ "$c_closed"   -gt 0 ]] && summary_parts+=("$c_closed stale PR(s) closed")
 [[ "$c_failed"   -gt 0 ]] && summary_parts+=("$c_failed failed")
 joined=""
@@ -495,6 +601,7 @@ if [[ ${#summary_parts[@]} -gt 0 ]]; then
 fi
 echo "cargo_lock_summary=${joined}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
-# Fail the job only on hard errors — not on conflict or CI-blocked PRs (those
-# are expected and handled via manual resolution).
+# Fail the job only on hard errors — not on conflict / red-CI / still-on-CI
+# PRs (those are expected and handled via manual resolution or the next
+# nightly).
 [[ "$c_failed" -eq 0 ]]
