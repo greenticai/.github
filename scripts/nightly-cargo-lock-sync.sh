@@ -4,7 +4,11 @@
 # Runs after the tier-ordered dev-publish finishes. For every dev-publish-enabled
 # manifest repo that has a develop branch and a Cargo.lock at its root:
 #
-#   1. Shallow-clone develop.
+#   0. Merge this repo's lock PR from a previous nightly if it has since gone
+#      green (reap-before-refresh). The reap window in step 3 is measured from
+#      the push, and the push restarts CI, so without this any repo whose CI
+#      outruns the window is re-raced and re-parked nightly, forever.
+#   1. Shallow-clone develop (now carrying whatever step 0 landed).
 #   2. `cargo update` scoped to Greentic-owned crates from the manifest that
 #      (a) appear in the repo's lock and (b) are not workspace members.
 #      Dev versions ({M.m.RUN_ID}) published earlier in this run resolve from
@@ -98,6 +102,82 @@ for name, entry in m.get('repos', {}).items():
     org = entry.get('org', 'greenticai')
     print(f'{org}/{name}')
 "
+}
+
+# ── Check-rollup predicates. Both take a `gh pr view --json statusCheckRollup`
+# payload and echo a count.
+#
+# statusCheckRollup mixes two shapes: CheckRun rows carry status/conclusion,
+# commit-status rows carry state. A row counts as pending while its CheckRun
+# status is anything but COMPLETED or its state is PENDING/EXPECTED; it counts
+# as failed on a red conclusion or state. SKIPPED and NEUTRAL are fine.
+checks_pending() {
+  jq '[.statusCheckRollup[]? | select(
+      ((.status // "") as $s | ($s != "" and $s != "COMPLETED"))
+      or ((.state // "") | IN("PENDING","EXPECTED"))
+    )] | length' <<<"$1"
+}
+
+checks_failed() {
+  jq '[.statusCheckRollup[]? | select(
+      ((.conclusion // "") | IN("FAILURE","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STARTUP_FAILURE"))
+      or ((.state // "") | IN("FAILURE","ERROR"))
+    )] | length' <<<"$1"
+}
+
+# ── Merge a previous nightly's lock PR that has since gone green, BEFORE the
+# force-push below rewrites its branch.
+#
+# Without this, any repo whose CI outruns the reap window can never merge: the
+# window is measured from the push, and tonight's push restarts CI from zero, so
+# the PR is re-raced and re-parked every night, forever. Measured 2026-07-17:
+# greentic-update took 67 min to go green against a 35-min window; dw-providers
+# 56, component 52, gui 43, deployer 42, messaging-providers 42 — none of them
+# could ever merge. Reaping first also means the clone below sees the landed
+# lock, so tonight's `cargo update` starts from the right base.
+#
+# Conservative by design: anything not plainly safe is left alone for
+# reap_pending (or a human). Every probe fails closed.
+reap_ready_pr() {
+  local full="$1"
+  local name="$2"
+  local pr json non_lock foreign
+
+  pr=$(gh pr list --repo "$full" --head "$BRANCH" --state open \
+        --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  [[ -z "$pr" ]] && return 0
+
+  json=$(gh pr view "$pr" --repo "$full" \
+          --json state,mergeable,mergeStateStatus,statusCheckRollup 2>/dev/null) || return 0
+  [[ "$(jq -r '.state // ""'            <<<"$json")" == "OPEN"      ]] || return 0
+  [[ "$(jq -r '.mergeable // ""'        <<<"$json")" == "MERGEABLE" ]] || return 0
+  [[ "$(jq -r '.mergeStateStatus // ""' <<<"$json")" == "CLEAN"     ]] || return 0
+
+  # No checks at all is not evidence of green — refuse rather than guess.
+  [[ "$(jq '.statusCheckRollup | length' <<<"$json")" != "0" ]] || return 0
+  [[ "$(checks_pending "$json")" == "0" ]] || return 0
+  [[ "$(checks_failed  "$json")" == "0" ]] || return 0
+
+  # A red-CI lock PR is repaired by committing the source fix onto this very
+  # branch, so never merge anything beyond a bot-authored Cargo.lock edit.
+  # Same probes (and same empty-authors caveat) as close_stale_bot_pr.
+  non_lock=$(gh pr view "$pr" --repo "$full" --json files \
+              --jq '[.files[].path | select(endswith("Cargo.lock") | not)] | length' 2>/dev/null || echo 1)
+  foreign=$(gh pr view "$pr" --repo "$full" --json commits \
+              --jq "[.commits[] | select((.authors | length) == 0 or any(.authors[]; .name != \"$BOT_AUTHOR\"))] | length" 2>/dev/null || echo 1)
+  if [[ "$non_lock" != "0" || "$foreign" != "0" ]]; then
+    warn "$name lock PR #$pr carries non-bot changes (files=$non_lock commits=$foreign) — not reaping"
+    return 0
+  fi
+
+  local out
+  if out=$(gh pr merge --repo "$full" "$pr" --squash 2>&1); then
+    ((c_reaped++)) || true
+    log "  ⤺ $name: reaped previous nightly's green lock PR #$pr before refresh"
+  else
+    warn "$name pre-refresh reap of #$pr failed: $(head -2 <<<"$out" | tr '\n' ' ')"
+  fi
+  return 0
 }
 
 # ── Block until GitHub has decided whether the PR merges cleanly.
@@ -209,6 +289,11 @@ process_repo() {
     out_status="failed"
     return 0
   fi
+
+  # Land a previous nightly's now-green lock PR before we rewrite its branch,
+  # so slow-CI repos aren't starved by their own refresh. Must run before the
+  # clone: merging advances develop, and the clone below needs that lock.
+  reap_ready_pr "$full" "$name"
 
   local dir="$WORK_DIR/$name"
   local auth_url="https://x-access-token:${GH_TOKEN}@github.com/${full}.git"
@@ -351,9 +436,10 @@ except Exception:
 Automated nightly \`cargo update\` — refreshes \`Cargo.lock\` with the latest
 Greentic crate versions published to CodeArtifact earlier in this run.
 
-The nightly merges this PR automatically once its CI passes. If it sits
-unmerged, CI on it is red, the branch conflicts with develop, or CI was still
-running when the nightly's merge window closed — the next nightly refreshes it.
+The nightly merges this PR automatically once its CI passes. If CI is still
+running when the merge window closes, the next nightly merges it before
+refreshing the branch, so a slow CI run only delays the lock — it never strands
+it. A PR that stays open past that has red CI or conflicts with develop.
 
 Branch is long-lived — subsequent nightlies force-push to it.
 
@@ -432,14 +518,8 @@ reap_pending() {
 
       mergeable=$(jq -r '.mergeable' <<<"$json")
       n_checks=$(jq '.statusCheckRollup | length' <<<"$json")
-      n_pending=$(jq '[.statusCheckRollup[]? | select(
-          ((.status // "") as $s | ($s != "" and $s != "COMPLETED"))
-          or ((.state // "") | IN("PENDING","EXPECTED"))
-        )] | length' <<<"$json")
-      n_failed=$(jq '[.statusCheckRollup[]? | select(
-          ((.conclusion // "") | IN("FAILURE","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STARTUP_FAILURE"))
-          or ((.state // "") | IN("FAILURE","ERROR"))
-        )] | length' <<<"$json")
+      n_pending=$(checks_pending "$json")
+      n_failed=$(checks_failed "$json")
 
       if [[ "$mergeable" == "CONFLICTING" ]]; then
         ((c_conflict++)) || true
@@ -460,10 +540,20 @@ reap_pending() {
         continue
       fi
 
-      if gh pr merge --repo "$full" "$url" --squash 2>/dev/null; then
+      # Never swallow the merge error. This call failing while the PR is green
+      # and MERGEABLE is exactly how ~16 repos a night went unmerged: the PR was
+      # pushed back onto `still` and reported as "still on CI", which is a lie —
+      # its CI had finished. 2026-07-17 (run 29556686456): 15 PRs were green and
+      # MERGEABLE inside the window, the reaper merged zero of them across its
+      # last 7 rounds, and the run still reported success. All 15 then merged by
+      # hand with this exact command, so keep the reason visible.
+      local merge_out
+      if merge_out=$(gh pr merge --repo "$full" "$url" --squash 2>&1); then
         ((c_merged++)) || true
         log "  ✓ merged after green CI: $name — $url"
       else
+        ((c_merge_err++)) || true
+        warn "$name merge failed while green+MERGEABLE: $(head -2 <<<"$merge_out" | tr '\n' ' ') — $url"
         still+=("$entry")
       fi
     done
@@ -491,6 +581,8 @@ crate_count=$(echo "$GREENTIC_CRATES" | wc -l)
 log "Greentic crates in scope: $crate_count"
 
 c_merged=0
+c_reaped=0
+c_merge_err=0
 c_conflict=0
 c_ci_red=0
 c_pending=0
@@ -542,6 +634,8 @@ done
 log ""
 log "━━━ Summary ━━━"
 log "  Merged after green CI:       $c_merged"
+log "  Reaped before refresh:       $c_reaped"
+log "  Merge failed while green:    $c_merge_err"
 log "  Conflict (open PR):          $c_conflict"
 log "  CI red (open PR):            $c_ci_red"
 log "  Still on CI at window close: $c_pending"
@@ -557,6 +651,8 @@ log "  Failed:                      $c_failed"
   echo "| Status | Count |"
   echo "|--------|-------|"
   echo "| Merged after green CI | $c_merged |"
+  echo "| Reaped before refresh | $c_reaped |"
+  echo "| Merge failed while green | $c_merge_err |"
   echo "| Conflict (open PR) | $c_conflict |"
   echo "| CI red (open PR) | $c_ci_red |"
   echo "| Still on CI at window close | $c_pending |"
