@@ -33,6 +33,10 @@ set -uo pipefail
 MANIFEST="toolchain/REPO_MANIFEST.toml"
 BRANCH="chore/nightly-cargo-update"
 BOT_AUTHOR="greentic-ci[bot]"
+# The App's authenticated PR-author identity. Distinct from BOT_AUTHOR, which is
+# only a commit's git metadata and therefore trivially spoofable — never gate a
+# merge on that alone.
+BOT_APP_LOGIN="app/greentic-ci"
 WORK_DIR="$(mktemp -d -t cargo-lock-sync-XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -141,14 +145,42 @@ checks_failed() {
 reap_ready_pr() {
   local full="$1"
   local name="$2"
-  local pr json non_lock foreign
+  local org="${full%%/*}"
+  local pr json head_sha non_lock foreign
 
-  pr=$(gh pr list --repo "$full" --head "$BRANCH" --state open \
+  # --base develop is load-bearing: `gh pr list --head` constrains the head ref
+  # NAME and nothing else. Verified 2026-07-17 — a --head lookup happily returned
+  # a PR whose base was main, so without this a bot-branch PR opened against main
+  # would be selected here and squash-merged straight into the stable lane.
+  pr=$(gh pr list --repo "$full" --head "$BRANCH" --base develop --state open \
         --json number --jq '.[0].number // empty' 2>/dev/null || true)
   [[ -z "$pr" ]] && return 0
 
   json=$(gh pr view "$pr" --repo "$full" \
-          --json state,mergeable,mergeStateStatus,statusCheckRollup 2>/dev/null) || return 0
+          --json state,mergeable,mergeStateStatus,statusCheckRollup,headRefOid,baseRefName,isCrossRepository,headRepositoryOwner,author 2>/dev/null) || return 0
+
+  # Provenance, before anything else. These repos are public and carry no
+  # required status checks, so a merge here runs with the App's privileges on
+  # attacker-openable ground: --head matches on ref name only, so a fork can
+  # present a branch of the same name, and a Cargo.lock is a supply-chain
+  # payload. Gate on the authenticated App author and the head's owner — never
+  # on commit author.name, which is just git metadata anyone can set.
+  # Loud on rejection: a silent refusal is indistinguishable from "nothing to
+  # reap", which is how this class of bug stays invisible for days.
+  # Booleans are compared with an explicit if/else, never `//`: jq's alternative
+  # operator treats `false` as empty, so `.isCrossRepository // true` yields
+  # *true* for a legitimate non-fork PR and would refuse every valid PR — a
+  # reaper that silently never reaps looks exactly like one with nothing to do.
+  # null still lands on the refusing side, so the probes stay fail-closed.
+  if [[ "$(jq -r '.baseRefName // ""'               <<<"$json")" != "develop"        ]] \
+  || [[ "$(jq -r 'if .isCrossRepository == false then "no" else "yes" end' <<<"$json")" != "no" ]] \
+  || [[ "$(jq -r '.headRepositoryOwner.login // ""' <<<"$json")" != "$org"           ]] \
+  || [[ "$(jq -r '.author.login // ""'              <<<"$json")" != "$BOT_APP_LOGIN" ]] \
+  || [[ "$(jq -r 'if .author.is_bot == true then "yes" else "no" end' <<<"$json")" != "yes" ]]; then
+    warn "$name lock PR #$pr failed provenance (base/fork/author) — not reaping"
+    return 0
+  fi
+
   [[ "$(jq -r '.state // ""'            <<<"$json")" == "OPEN"      ]] || return 0
   [[ "$(jq -r '.mergeable // ""'        <<<"$json")" == "MERGEABLE" ]] || return 0
   [[ "$(jq -r '.mergeStateStatus // ""' <<<"$json")" == "CLEAN"     ]] || return 0
@@ -170,8 +202,16 @@ reap_ready_pr() {
     return 0
   fi
 
+  # Pin the merge to the exact head every probe above inspected. The branch is
+  # long-lived and force-pushed, the nightly has no concurrency guard, and the
+  # checks/files/commits probes are separate API calls — so a head that changes
+  # underneath us would otherwise be merged on the strength of the OLD head's
+  # green CI. --match-head-commit turns that race into a refusal.
+  head_sha=$(jq -r '.headRefOid // ""' <<<"$json")
+  [[ -n "$head_sha" ]] || return 0
+
   local out
-  if out=$(gh pr merge --repo "$full" "$pr" --squash 2>&1); then
+  if out=$(gh pr merge --repo "$full" "$pr" --squash --match-head-commit "$head_sha" 2>&1); then
     ((c_reaped++)) || true
     log "  ⤺ $name: reaped previous nightly's green lock PR #$pr before refresh"
   else
@@ -214,7 +254,8 @@ close_stale_bot_pr() {
   local name="$2"
   local pr non_lock foreign
 
-  pr=$(gh pr list --repo "$full" --head "$BRANCH" --state open \
+  # --base develop: only ever close a PR the bot itself could have opened.
+  pr=$(gh pr list --repo "$full" --head "$BRANCH" --base develop --state open \
         --json number --jq '.[0].number // empty' 2>/dev/null || true)
   [[ -z "$pr" ]] && return 1
   out_pr_url="https://github.com/${full}/pull/${pr}"
@@ -424,9 +465,11 @@ except Exception:
     return 0
   fi
 
-  # Find or create the PR
+  # Find or create the PR. --base develop matches what `gh pr create` opens
+  # below, and keeps a same-named branch on a fork — or a bot-branch PR aimed at
+  # main — from being adopted here and then merged by reap_pending.
   local existing
-  existing=$(gh pr list --repo "$full" --head "$BRANCH" --state open \
+  existing=$(gh pr list --repo "$full" --head "$BRANCH" --base develop --state open \
               --json number --jq '.[0].number // empty' 2>/dev/null || true)
   if [[ -n "$existing" ]]; then
     out_pr_url="https://github.com/${full}/pull/${existing}"
