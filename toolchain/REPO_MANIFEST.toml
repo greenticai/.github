@@ -854,6 +854,12 @@ version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
+# rnd (research) lane: greentic-start is BINARY-ONLY on research — its library
+# can't reach crates.io (git deps + publish=false greentic-aw-runtime), so it
+# publishes only the `greentic-start-rnd` binstall shim. Reuses `publishes`
+# (crates) + `binary-crates`; `rnd-dual-role-binary-crates` is intentionally
+# unset (empty) so rnd-publish never tries to `cargo publish` the real library.
+rnd-publish-enabled = true
 
 # ─── Tier 9 — Top-level CLI & demos ─────────────────────────────────────────
 
