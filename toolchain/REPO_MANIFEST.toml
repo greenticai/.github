@@ -67,6 +67,16 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
 
+[repos.greentic-admin]
+org = "greentic-biz"
+variant = "host"
+tier = 0
+publishes = []  # service binary with embedded React SPA — not a crates.io crate
+version-track = { from = "1.1", to = "1.2" }
+dev-publish-enabled = false
+weekly-stable-enabled = false
+nightly-codex-enabled = false
+
 [repos.greentic-cap]
 org = "greenticai"
 variant = "host"
@@ -87,18 +97,8 @@ dev-publish-enabled = false
 weekly-stable-enabled = false
 nightly-codex-enabled = true
 
-[repos.greentic-designer-admin]
-org = "greentic-biz"
-variant = "host"
-tier = 0
-publishes = []  # service binary with embedded React SPA — not a crates.io crate
-version-track = { from = "1.1", to = "1.2" }
-dev-publish-enabled = false
-weekly-stable-enabled = false
-nightly-codex-enabled = false
-
 [repos.greentic-designer-extensions]
-org = "greentic-biz"
+org = "greenticai"
 variant = "wasm"
 tier = 3
 publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
@@ -900,7 +900,7 @@ nightly-codex-enabled = false
 # Versioned via manually curated v1 major tag + v1.x.x release tags.
 archived = true
 
-[repos.greentic-distributor]
+[repos.greentic-distributor-old]
 org = "greentic-biz"
 variant = "host"
 tier = 8
@@ -930,7 +930,7 @@ weekly-stable-enabled = false
 nightly-codex-enabled = false
 archived = true
 
-[repos.greentic-repo]
+[repos.greentic-repo-old]
 org = "greentic-biz"
 variant = "host"
 tier = 8
@@ -940,7 +940,7 @@ weekly-stable-enabled = false
 nightly-codex-enabled = false
 archived = true
 
-[repos.greentic-store]
+[repos.greentic-store-old]
 org = "greentic-biz"
 variant = "host"
 tier = 8
