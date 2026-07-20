@@ -511,14 +511,14 @@ EOF
     return 0
   fi
 
-  # Never touch the merge API at push time. No repo in the fleet has required
-  # status checks on develop (free-plan private repos can't carry branch
-  # protection, and the public ones have none configured), so `gh pr merge
-  # --auto` doesn't queue anything — where it "succeeds" it merges the PR
-  # immediately, seconds after the push, before CI has looked at the new lock;
-  # where it fails the PR sits open forever with nobody to merge it once CI
-  # goes green. Park the PR instead; reap_pending merges it after its checks
-  # actually finish.
+  # Never touch the merge API at push time. Merging seconds after the push
+  # lands the new lock before CI has looked at it. Park the PR instead;
+  # reap_pending merges it after its checks actually finish.
+  #
+  # (The comment that used to sit here claimed no repo in the fleet carries
+  # branch protection on develop. That is false, and believing it cost three
+  # nightlies: 18 public repos protect develop with a push `restrictions`
+  # allowlist of team `developers` and `apps: []`. See the reaper's merge call.)
   out_status="pending"
   return 0
 }
@@ -590,13 +590,27 @@ reap_pending() {
       # MERGEABLE inside the window, the reaper merged zero of them across its
       # last 7 rounds, and the run still reported success. All 15 then merged by
       # hand with this exact command, so keep the reason visible.
+      #
+      # The cause, confirmed 2026-07-20 across runs 29631115174 / 29674666358:
+      # `develop` on 18 public repos carries a branch-protection push
+      # `restrictions` allowlist holding team `developers` and `apps: []`. We
+      # authenticate as the greentic-ci App, which is not on that allowlist, so
+      # GitHub answers "base branch policy prohibits the merge" no matter how
+      # green the PR is. `mergeable` only reports conflicts, so the reaper never
+      # saw it coming. Retrying cannot help — a human on the allowlist merged
+      # all 19 by hand with this same command. The repair is to put the App on
+      # the allowlist: scripts/allow-bot-merge-on-protected-branches.sh.
       local merge_out
       if merge_out=$(gh pr merge --repo "$full" "$url" --squash 2>&1); then
         ((c_merged++)) || true
         log "  ✓ merged after green CI: $name — $url"
       else
         ((c_merge_err++)) || true
+        merge_err_urls+=("$name: $url")
         warn "$name merge failed while green+MERGEABLE: $(head -2 <<<"$merge_out" | tr '\n' ' ') — $url"
+        if grep -qi 'base branch policy prohibits the merge' <<<"$merge_out"; then
+          warn "$name: the greentic-ci App is not on develop's protection allowlist — run scripts/allow-bot-merge-on-protected-branches.sh"
+        fi
         still+=("$entry")
       fi
     done
@@ -636,6 +650,7 @@ c_failed=0
 conflict_urls=()
 red_urls=()
 pending_urls=()
+merge_err_urls=()
 failed_repos=()
 pending_prs=()
 
@@ -719,6 +734,16 @@ log "  Failed:                      $c_failed"
     echo "### Still on CI when the merge window closed"
     for u in "${pending_urls[@]}"; do echo "- $u"; done
   fi
+  if [[ ${#merge_err_urls[@]} -gt 0 ]]; then
+    echo ""
+    echo "### Green + MERGEABLE but the merge API refused"
+    echo ""
+    echo "Retrying will not help. The usual cause is that \`develop\` protection"
+    echo "restricts pushes to an allowlist the greentic-ci App is not on — repair"
+    echo "with \`bash scripts/allow-bot-merge-on-protected-branches.sh\`."
+    echo ""
+    for u in "${merge_err_urls[@]}"; do echo "- $u"; done
+  fi
   if [[ ${#failed_repos[@]} -gt 0 ]]; then
     echo ""
     echo "### Failed"
@@ -728,7 +753,8 @@ log "  Failed:                      $c_failed"
 
 # Extension line for the Slack summary
 summary_parts=()
-[[ "$c_merged"   -gt 0 ]] && summary_parts+=("$c_merged lock-PR(s) merged")
+[[ "$c_merged"    -gt 0 ]] && summary_parts+=("$c_merged lock-PR(s) merged")
+[[ "$c_merge_err" -gt 0 ]] && summary_parts+=("$c_merge_err merge(s) refused while green")
 [[ "$c_conflict" -gt 0 ]] && summary_parts+=("$c_conflict conflict(s) open")
 [[ "$c_ci_red"   -gt 0 ]] && summary_parts+=("$c_ci_red red-CI PR(s) open")
 [[ "$c_pending"  -gt 0 ]] && summary_parts+=("$c_pending still on CI")
@@ -740,7 +766,12 @@ if [[ ${#summary_parts[@]} -gt 0 ]]; then
 fi
 echo "cargo_lock_summary=${joined}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
-# Fail the job only on hard errors — not on conflict / red-CI / still-on-CI
-# PRs (those are expected and handled via manual resolution or the next
-# nightly).
-[[ "$c_failed" -eq 0 ]]
+# Fail the job on hard errors, and on a merge the API refused while the PR was
+# green and MERGEABLE. Conflict / red-CI / still-on-CI PRs stay non-fatal —
+# those are expected and clear via manual resolution or the next nightly.
+#
+# c_merge_err is fatal because nothing in the pipeline retries it: the branch
+# protection that causes it does not heal on its own, so a green run here means
+# the lock PRs sit open indefinitely while the summary claims success. That is
+# precisely what hid 19 stranded PRs across runs 29631115174 / 29674666358.
+[[ "$c_failed" -eq 0 && "$c_merge_err" -eq 0 ]]
