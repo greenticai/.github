@@ -27,8 +27,13 @@
 # Idempotent. Safe to re-run. Skips archived repos.
 #
 # Usage:
-#   bash scripts/allow-bot-merge-on-protected-branches.sh             # apply
+#   bash scripts/allow-bot-merge-on-protected-branches.sh             # apply, fleet-wide
 #   bash scripts/allow-bot-merge-on-protected-branches.sh --dry-run   # preview
+#   bash scripts/allow-bot-merge-on-protected-branches.sh --repo greenticai/greentic-x
+#
+# --repo restricts the run to one manifest entry. This rewrites branch
+# protection on every dev-publish-enabled repo, so prove it on one target
+# before turning it loose on all of them.
 #
 # Requires: gh CLI authenticated with repo-admin scope on both orgs.
 
@@ -38,9 +43,19 @@ MANIFEST="toolchain/REPO_MANIFEST.toml"
 BRANCH="develop"
 APP_SLUG="${GREENTIC_CI_APP_SLUG:-greentic-ci}"
 DRY_RUN=false
+ONLY_REPO=""
 
-if [[ "${1:-}" == "--dry-run" ]]; then
-  DRY_RUN=true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --repo)    ONLY_REPO="${2:-}"; shift 2 || true ;;
+    *)         echo "Error: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+
+if [[ -n "$ONLY_REPO" && "$ONLY_REPO" != */* ]]; then
+  echo "Error: --repo takes org/name, got '$ONLY_REPO'" >&2
+  exit 2
 fi
 
 if [[ ! -f "$MANIFEST" ]]; then
@@ -70,8 +85,14 @@ would=0
 failed=0
 failed_repos=()
 
+matched=0
+
 while IFS= read -r full; do
   [[ -z "$full" ]] && continue
+  if [[ -n "$ONLY_REPO" && "$full" != "$ONLY_REPO" ]]; then
+    continue
+  fi
+  ((matched++)) || true
 
   # One read decides everything. An unreachable branch, an unprotected one, or
   # protection without a `restrictions` block all mean the App can already
@@ -109,16 +130,30 @@ while IFS= read -r full; do
 
   # POST appends to the app allowlist; PUT would replace it. Append, so a repo
   # that already trusts some other App keeps it.
-  if gh api -X POST "repos/$full/branches/$BRANCH/protection/restrictions/apps" \
-       -f "apps[]=$APP_SLUG" --silent 2>/dev/null; then
+  #
+  # The body is a BARE JSON array, not {"apps": [...]}. This endpoint is the odd
+  # one out in the protection API, and the wrapped form fails 422 "is not an
+  # array" — so build it with jq and feed it via --input, rather than -f.
+  if post_out=$(jq -nc --arg s "$APP_SLUG" '[$s]' \
+                  | gh api -X POST "repos/$full/branches/$BRANCH/protection/restrictions/apps" \
+                      --input - 2>&1); then
     echo "  + $full — added $APP_SLUG (apps were: ${restrictions:-none})"
     ((ok++)) || true
   else
-    echo "  ✗ $full — POST failed (App installed on this repo?)"
+    # Show the reason. A silently-swallowed API error is the exact failure mode
+    # this whole change exists to remove.
+    echo "  ✗ $full — POST failed: $(tr '\n' ' ' <<<"$post_out" | head -c 200)"
     failed_repos+=("$full")
     ((failed++)) || true
   fi
 done < <(list_targets)
+
+# A --repo that matches nothing is a typo or a repo that is not
+# dev-publish-enabled. Either way it did no work, so do not report success.
+if [[ -n "$ONLY_REPO" && "$matched" -eq 0 ]]; then
+  echo "Error: --repo '$ONLY_REPO' matched no dev-publish-enabled manifest entry" >&2
+  exit 1
+fi
 
 echo ""
 echo "━━━ Summary ━━━"
