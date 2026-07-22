@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED from greenticai/greentic@0d1911a — do not edit directly -->
+<!-- AUTO-GENERATED from greenticai/greentic@ea68fbb — do not edit directly -->
 
 # Greentic — The Digital Workers OS
 
@@ -21,7 +21,19 @@ This is the kind of result Greentic is built for: a real digital worker that can
 
 ![IT Helpdesk Digital Worker](https://raw.githubusercontent.com/greenticai/greentic/main/greentic_readme_assets/helpdesk-webchat.png)
 
-After installing Greentic, you only need **three steps** to get a working digital worker running.
+`gtc up` does the whole thing in **one command** — it installs the toolchain,
+creates the bundle, sets it up, and starts it:
+
+```bash
+gtc up \
+  --answers https://github.com/greenticai/greentic-demo/releases/latest/download/helpdesk-itsm-create-answers.json \
+  --setup-answers https://github.com/greenticai/greentic-demo/releases/latest/download/helpdesk-itsm-setup-answers.json
+```
+
+It ends in a foreground server; Ctrl+C stops it. `--dry-run` prints the bundle
+directory it will create and every step it will run, without running any of
+them. Prefer the steps separately — or need a setup flag `up` does not forward,
+such as `--tenant` — then run them yourself:
 
 ## 1) Create a bundle
 
@@ -380,6 +392,9 @@ Install Greentic via `cargo-binstall`.
 cargo binstall gtc
 gtc install
 ```
+
+`gtc up` runs the install step itself, so for a demo those two lines collapse to
+`cargo binstall gtc` followed by a single `gtc up`.
 
 If you prefer installing from source:
 
