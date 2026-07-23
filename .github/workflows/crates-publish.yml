@@ -108,12 +108,13 @@ jobs:
           # ── Publish with exponential backoff ─────────────────────
           publish_crate() {
             local crate="$1"
+            local version="$2"
             local max_retries=3
             local delay=10
 
             # Skip if already published (idempotent retry)
-            if is_published "$crate" "$VERSION"; then
-              echo "✓ ${crate} ${VERSION} already on crates.io — skipping"
+            if is_published "$crate" "$version"; then
+              echo "✓ ${crate} ${version} already on crates.io — skipping"
               return 0
             fi
 
@@ -127,7 +128,7 @@ jobs:
               if output=$(cargo publish -p "${crate}" --allow-dirty 2>&1); then
                 echo "$output"
                 echo "::endgroup::"
-                echo "✓ Published ${crate} ${VERSION}"
+                echo "✓ Published ${crate} ${version}"
                 return 0
               fi
 
@@ -166,8 +167,17 @@ jobs:
 
           published=0
           for crate in ${{ inputs.crates }}; do
-            publish_crate "${crate}"
-            wait_for_propagation "${crate}" "${VERSION}"
+            # Resolve this crate's actual version (may differ from root VERSION
+            # in mixed-version workspaces, e.g. greentic-deploy-spec 0.2.x).
+            crate_version=$(cargo metadata --format-version=1 --no-deps \
+              | jq -r --arg c "$crate" '.packages[] | select(.name==$c) | .version')
+            if [[ -z "$crate_version" ]]; then
+              echo "::error::Could not resolve version for crate '${crate}' — not found in cargo metadata"
+              exit 1
+            fi
+
+            publish_crate "${crate}" "${crate_version}"
+            wait_for_propagation "${crate}" "${crate_version}"
             published=$((published + 1))
           done
 
