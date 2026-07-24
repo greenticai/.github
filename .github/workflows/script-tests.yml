@@ -28,6 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The scripts under test import these; dev-publish.yml and
+      # rnd-publish.yml pip-install them at their call sites, and a runner
+      # has neither preinstalled. Both are tiny pure-python packages.
+      - name: Install script dependencies
+        run: python3 -m pip install --quiet tomlkit tomli-w
+
       - name: Run script test harnesses
         run: |
           set -uo pipefail
