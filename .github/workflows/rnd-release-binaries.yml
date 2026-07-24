@@ -253,41 +253,19 @@ jobs:
           merge-multiple: true
           path: .dist-staging
 
-      - name: Ensure research prerelease exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists — reusing (idempotent)"
-          else
-            # Research releases are prerelease + not latest so they don't
-            # displace stable release visibility on the repo page. Tag
-            # is created at github.sha (the research commit that triggered
-            # this workflow) so binstall downloads correspond exactly to
-            # the code state that produced the published crate.
-            gh release create "$tag" \
-              --target "$SHA" \
-              --title "$tag (research build)" \
-              --notes "Automated research-lane build. Paired with \`$(gh repo view --json name -q .name)-rnd@${VERSION}\` on crates.io." \
-              --prerelease \
-              --latest=false
-          fi
-
-      - name: Upload archives to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-          shopt -s nullglob
-          files=(.dist-staging/*.tgz .dist-staging/*.zip .dist-staging/*.sha256)
-          if [[ ${#files[@]} -eq 0 ]]; then
-            echo "::error::No archives found in .dist-staging/"
-            exit 1
-          fi
-          gh release upload "$tag" "${files[@]}" --clobber
+      # Research releases are prerelease + not latest so they don't displace
+      # stable release visibility on the repo page. The tag is created at
+      # github.sha (the research commit that triggered this workflow) so
+      # binstall downloads correspond exactly to the code state that produced
+      # the published crate. Idempotent and retried — see the action's script
+      # header.
+      - name: Ensure research prerelease exists and attach archives
+        uses: greenticai/.github/.github/actions/ensure-release@main
+        with:
+          tag: v${{ inputs.version }}
+          target: ${{ github.sha }}
+          title: v${{ inputs.version }} (research build)
+          notes: "Automated research-lane build. Paired with `${{ inputs.package }}-rnd@${{ inputs.version }}` on crates.io."
+          prerelease: "true"
+          latest: "false"
+          github-token: ${{ github.token }}

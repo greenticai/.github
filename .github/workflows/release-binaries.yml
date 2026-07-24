@@ -225,38 +225,15 @@ jobs:
           merge-multiple: true
           path: .dist-staging
 
-      - name: Ensure GitHub release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          GENERATE_NOTES: ${{ inputs.generate-release-notes }}
-        run: |
-          set -euo pipefail
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists"
-          else
-            notes_flag=""
-            if [[ "${GENERATE_NOTES}" == "true" ]]; then
-              notes_flag="--generate-notes"
-            else
-              notes_flag="--notes="""
-            fi
-            gh release create "${TAG}" --title "${TAG}" ${notes_flag}
-          fi
-
-      - name: Upload archives to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          files=(.dist-staging/*.tgz .dist-staging/*.zip .dist-staging/*.sha256)
-          if [[ ${#files[@]} -eq 0 ]]; then
-            echo "::error::No archives found in dist/"
-            exit 1
-          fi
-          gh release upload "${TAG}" "${files[@]}" --clobber
+      # The tag is already pushed, so no target is needed. Idempotent and
+      # retried — see the action's script header.
+      - name: Ensure GitHub release exists and attach archives
+        uses: greenticai/.github/.github/actions/ensure-release@main
+        with:
+          tag: ${{ github.ref_name }}
+          title: ${{ github.ref_name }}
+          generate-notes: ${{ inputs.generate-release-notes }}
+          github-token: ${{ github.token }}
 
   ghcr-publish:
     name: Push archives to GHCR

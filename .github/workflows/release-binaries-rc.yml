@@ -222,33 +222,13 @@ jobs:
           merge-multiple: true
           path: .dist-staging
 
-      - name: Ensure RC pre-release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
-          REF: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Pre-release ${TAG} already exists, will upload archives with --clobber"
-          else
-            gh release create "${TAG}" \
-              --title "${TAG}" \
-              --target "${REF}" \
-              --prerelease \
-              --notes "Release-candidate build for the stable-e2e-gate. Not for general consumption."
-          fi
-
-      - name: Upload archives to RC pre-release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          files=(.dist-staging/*.tgz .dist-staging/*.zip .dist-staging/*.sha256)
-          if [[ ${#files[@]} -eq 0 ]]; then
-            echo "::error::No archives found in .dist-staging/"
-            exit 1
-          fi
-          gh release upload "${TAG}" "${files[@]}" --clobber
+      # Idempotent and retried — see the action's script header.
+      - name: Ensure RC pre-release exists and attach archives
+        uses: greenticai/.github/.github/actions/ensure-release@main
+        with:
+          tag: ${{ inputs.tag }}
+          target: ${{ inputs.ref }}
+          title: ${{ inputs.tag }}
+          notes: "Release-candidate build for the stable-e2e-gate. Not for general consumption."
+          prerelease: "true"
+          github-token: ${{ github.token }}
