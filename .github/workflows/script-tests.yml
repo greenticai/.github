@@ -1,0 +1,52 @@
+name: Script tests
+
+# Every test harness in `scripts/` was local-run-only — nothing in CI ran
+# them. scripts/test_reap_ready_pr.sh says so in its own header, and names
+# the cost: a reaper that merged nothing for 7 straight rounds shipped
+# unnoticed. The release-binaries reusables are deliberately outside
+# self-test.yml (they cut real GitHub Releases), so this is the only gate
+# the ensure-release retry logic has.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - '.github/actions/**'
+      - '.github/workflows/script-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: script-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  script-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # The scripts under test import these; dev-publish.yml and
+      # rnd-publish.yml pip-install them at their call sites, and a runner
+      # has neither preinstalled. Both are tiny pure-python packages.
+      - name: Install script dependencies
+        run: python3 -m pip install --quiet tomlkit tomli-w
+
+      - name: Run script test harnesses
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          status=0
+          for t in scripts/test_*.sh; do
+            echo "::group::$t"
+            bash "$t" || status=1
+            echo "::endgroup::"
+          done
+          for t in scripts/test_*.py; do
+            echo "::group::$t"
+            python3 "$t" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"

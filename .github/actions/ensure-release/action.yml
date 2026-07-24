@@ -1,0 +1,65 @@
+name: "Ensure GitHub Release"
+description: "Idempotently ensure a Release exists for a tag and attach archives to it, retrying transient Releases-API failures."
+
+inputs:
+  tag:
+    description: "Release tag, e.g. 'v1.2.30069402499'"
+    required: true
+  title:
+    description: "Release title. Omitted when empty, which makes gh fall back to the tag."
+    required: false
+    default: ""
+  notes:
+    description: "Release body. Ignored when generate-notes is 'true'."
+    required: false
+    default: ""
+  generate-notes:
+    description: "'true' to let GitHub generate the release notes instead of using `notes`."
+    required: false
+    default: "false"
+  target:
+    description: "Commit-ish the tag is created at. Omitted when empty, which is what an already-pushed tag wants."
+    required: false
+    default: ""
+  prerelease:
+    description: "'true' to mark the release as a prerelease."
+    required: false
+    default: "false"
+  latest:
+    description: "'true'/'false' to force the 'Latest' flag; empty leaves gh's own default alone."
+    required: false
+    default: ""
+  assets:
+    description: "Newline-separated globs of files to upload. Uploaded with --clobber."
+    required: false
+    default: |
+      .dist-staging/*.tgz
+      .dist-staging/*.zip
+      .dist-staging/*.sha256
+  attempts:
+    description: "Maximum attempts per REST write before the step fails."
+    required: false
+    default: "5"
+  github-token:
+    description: "Token with contents:write on the repository."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        # Explicit, so the action does not depend on the caller having
+        # checked the repository out into the working directory.
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+        TITLE: ${{ inputs.title }}
+        NOTES: ${{ inputs.notes }}
+        GENERATE_NOTES: ${{ inputs.generate-notes }}
+        TARGET: ${{ inputs.target }}
+        PRERELEASE: ${{ inputs.prerelease }}
+        LATEST: ${{ inputs.latest }}
+        ASSETS: ${{ inputs.assets }}
+        ATTEMPTS: ${{ inputs.attempts }}
+      run: bash "${{ github.action_path }}/ensure-release.sh"
