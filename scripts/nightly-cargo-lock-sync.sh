@@ -49,8 +49,13 @@ MERGEABLE_POLL_SEC="${MERGEABLE_POLL_SEC:-3}"
 # The reap phase re-polls parked PRs until their checks finish, bounded so the
 # job stays inside its timeout and the 1-hour App-token TTL. Overridable so a
 # test can drive the loop without waiting.
+#
+# 45 min is near the ceiling: the tokens are minted once at job start and never
+# refreshed, so repo loop (~7 min, more when many repos change) + reap must land
+# inside the TTL. Raising this further means refreshing the App tokens mid-run,
+# the way nightly-develop-orchestrate.sh does.
 REAPER_POLL_SEC="${REAPER_POLL_SEC:-90}"
-REAPER_MAX_SEC="${REAPER_MAX_SEC:-2100}"
+REAPER_MAX_SEC="${REAPER_MAX_SEC:-2700}"
 
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
