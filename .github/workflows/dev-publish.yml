@@ -341,7 +341,16 @@ jobs:
             else
               label="$arg"
             fi
-            local max_retries=5
+            # crates.io refills the "new version of an existing crate" bucket at
+            # ~1/min. A repo publishing N crates back-to-back (greentic-sorla
+            # publishes 6, counting its bifurcated -dev binary) drains the burst
+            # and then needs roughly N minutes of waiting. At max_retries=5 the
+            # loop gave up after ~5 minutes and failed the whole nightly tier —
+            # observed on greentic-sorla runs 30193541428 and 30146067683, where
+            # the advertised reset advanced exactly 60s per attempt.
+            # Retries are free when there is no rate limit (the loop returns on
+            # first success), so the budget is sized for the worst repo.
+            local max_retries=15
             local delay=10
             local attempt=0
             local output=""
