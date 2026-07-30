@@ -363,17 +363,29 @@ process_repo() {
     return 0
   fi
 
-  # Which (name, version) pairs appear in this lock? One per line as "name<TAB>version".
-  # We disambiguate by version because the lock can briefly carry multiple versions
-  # of the same Greentic crate during forward-port windows (e.g. old stable 0.5.2
-  # pulled in transitively + freshly-published 1.1.0-dev.{RUN_ID}). Bare `-p name`
-  # would error: `specification \`<name>\` is ambiguous`.
+  # Which registry packages appear in this lock? One per line as
+  # "name<TAB>version<TAB>source".
+  #
+  # We key on source AND version because neither alone is unique. The lock can
+  # briefly carry multiple versions of the same Greentic crate during
+  # forward-port windows (e.g. old stable 0.5.2 pulled in transitively +
+  # freshly-published 1.1.0-dev.{RUN_ID}), so bare `-p name` errors with
+  # `specification \`<name>\` is ambiguous`. It can equally carry the same
+  # version twice from different sources — a crates.io release plus a git pin
+  # resolving to the same number — and then `-p name@version` is ambiguous too.
+  #
+  # Git-sourced packages are dropped rather than qualified: this job refreshes
+  # published versions, and a `branch = ...` pin passed to `cargo update` would
+  # silently advance to that branch's HEAD on every run.
   local lock_pkgs
   lock_pkgs=$(python3 -c "
 import tomllib, pathlib
 data = tomllib.loads(pathlib.Path('$dir/Cargo.lock').read_text())
 for p in data.get('package', []):
-    print(p['name'] + '\t' + p['version'])
+    src = p.get('source')
+    if not src or not src.startswith(('registry+', 'sparse+')):
+        continue
+    print(p['name'] + '\t' + p['version'] + '\t' + src)
 " 2>/dev/null || true)
 
   # Which crates are workspace members? (cargo update rejects those with -p)
@@ -387,16 +399,17 @@ except Exception:
     pass
 " 2>/dev/null || true )
 
-  # Build -p filter as `name@version` for every version of each Greentic crate
-  # present in the lock (skipping workspace members).
+  # Build -p filter as the fully-qualified `source#name@version` PackageIdSpec
+  # for every registry copy of each Greentic crate present in the lock
+  # (skipping workspace members).
   local pkg_args=()
   while IFS= read -r crate; do
     [[ -z "$crate" ]] && continue
     grep -qxF "$crate" <<<"$workspace_members" && continue
-    while IFS=$'\t' read -r pkg_name pkg_version; do
+    while IFS=$'\t' read -r pkg_name pkg_version pkg_source; do
       [[ "$pkg_name" == "$crate" ]] || continue
-      [[ -z "$pkg_version" ]] && continue
-      pkg_args+=(-p "${crate}@${pkg_version}")
+      [[ -z "$pkg_version" || -z "$pkg_source" ]] && continue
+      pkg_args+=(-p "${pkg_source}#${crate}@${pkg_version}")
     done <<<"$lock_pkgs"
   done <<<"$GREENTIC_CRATES"
 
