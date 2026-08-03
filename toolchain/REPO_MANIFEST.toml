@@ -994,6 +994,15 @@ version-track = { from = "0.1", to = "0.2" }
 # client headers/lib at link time; a stock runner has neither, so
 # dev-prepare's --all-features would fail at foundationdb-gen. ci.yml
 # already drops --all-features for the same reason.
+# The CLI crate cannot be published from any lane right now: it carries two
+# optional deps with no version requirement, which cargo publish rejects —
+# `greentic-ext-runtime` (git rev-pinned to an untagged 1.2.0 commit; crates.io
+# is at 1.2.27, so stamping a version would ship against different code than
+# was built) and `sorx-event-bridge` (path dep, not on crates.io at all).
+# The dev lane still publishes the two library crates, and the CLI binary still
+# ships via dev-release-binaries.yml + the GitHub Release. Drop this line once
+# both deps carry real version requirements.
+dev-exclude-publishes = ["greentic-sorx"]
 all-features = false
 dev-publish-enabled = true
 weekly-stable-enabled = true
