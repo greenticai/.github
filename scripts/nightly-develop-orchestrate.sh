@@ -29,7 +29,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MANIFEST="toolchain/REPO_MANIFEST.toml"
+MANIFEST="${MANIFEST:-toolchain/REPO_MANIFEST.toml}"
 WORKFLOW="dev-publish.yml"
 BRANCH="develop"
 POLL_INTERVAL=30    # seconds between status polls
@@ -135,6 +135,58 @@ first_failed_job_name=""
 first_failed_job_url=""
 first_failure_error=""
 declare -a failure_lines=()
+declare -A publishing_repos=()
+
+# ── Cascade gating ───────────────────────────────────────────────
+# A successful tier arms `lower_tier_published`, which force-dispatches every
+# repo in every higher tier ("upstream changed") regardless of source delta.
+# That is only correct when the successful repo actually produced a new
+# artefact for downstream repos to build against.
+#
+# 32 of the 67 dev-publish-enabled repos carry `publishes = []` — their
+# dev-publish caller is a CI-only gate that uploads nothing. Letting those arm
+# the cascade re-publishes dozens of unchanged crates on every nightly, which
+# is exactly what trips crates.io's "too many updates to existing crates"
+# limit (429). greentic-runner died that way on 2026-07-31 (run 30610298701):
+# the retry loop cannot win, because each rejected attempt pushes the reset
+# hint another minute out.
+load_publishing_repos() {
+  local org name
+  while IFS=$'\t' read -r org name; do
+    publishing_repos["$org/$name"]=1
+  done < <(python3 -c "
+import tomllib
+with open('$MANIFEST', 'rb') as f:
+    m = tomllib.load(f)
+for name, entry in m.get('repos', {}).items():
+    if entry.get('archived', False):
+        continue
+    if not entry.get('publishes'):
+        continue
+    print(f\"{entry['org']}\t{name}\")
+")
+}
+
+# True when the repo uploads artefacts, i.e. its manifest `publishes` list is
+# non-empty. Unknown repos are treated as non-publishing — a repo missing from
+# the manifest cannot have produced anything downstream depends on.
+publishes_artifacts() {
+  [[ -n "${publishing_repos[$1]:-}" ]]
+}
+
+# Record a successful downstream run, arming the cascade only for repos that
+# actually publish. CI-only repos still count as succeeded and are still named
+# in the summary; they just do not force higher tiers to rebuild.
+mark_published() {
+  local repo="$1"
+  local n="${repo##*/}"
+  published_names="${published_names:+$published_names, }$n"
+  if publishes_artifacts "$repo"; then
+    lower_tier_published=true
+  else
+    log "  ℹ $n — CI-only (manifest publishes = []); not cascading to higher tiers"
+  fi
+}
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -493,10 +545,8 @@ process_tier() {
 
     if wait_for_all "${to_wait[@]}"; then
       succeeded=$((succeeded + ${#to_wait[@]}))
-      lower_tier_published=true
       for entry in "${to_wait[@]}"; do
-        local r="${entry%%:*}"; local n="${r##*/}"
-        published_names="${published_names:+$published_names, }$n"
+        mark_published "${entry%%:*}"
       done
     else
       # Count individual outcomes
@@ -515,9 +565,7 @@ process_tier() {
 
         if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
           ((succeeded++)) || true
-          lower_tier_published=true
-          local n="${repo##*/}"
-          published_names="${published_names:+$published_names, }$n"
+          mark_published "$repo"
         else
           local failure_error=""
           local failed_job_name=""
@@ -586,10 +634,16 @@ for tier, org, name in entries:
 
 # ── Main ─────────────────────────────────────────────────────────
 
+# scripts/test_orchestrate_cascade.sh sources this file to unit-test the
+# cascade decision. Stop here so sourcing never dispatches anything.
+[[ -n "${ORCHESTRATE_LIB_ONLY:-}" ]] && return 0
+
 log "Nightly Develop — $(date -u '+%Y-%m-%d %H:%M UTC')"
 log "Branch: $BRANCH | Force: $FORCE"
 [[ -n "$TIER_FILTER" ]] && log "Tier filter: $TIER_FILTER"
 log ""
+
+load_publishing_repos
 
 current_tier=""
 current_repos=()
