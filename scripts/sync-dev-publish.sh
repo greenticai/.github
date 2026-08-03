@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 BIZ_DIR="${BIZ_DIR:-$WORKSPACE/GREENTIC-BIZ}"
 CANONICAL_DIR="$WORKSPACE/.github/toolchain"
-MANIFEST="$CANONICAL_DIR/REPO_MANIFEST.toml"
+MANIFEST="${MANIFEST:-$CANONICAL_DIR/REPO_MANIFEST.toml}"
 
 # Org → local directory mapping
 declare -A ORG_DIRS=(
@@ -116,6 +116,11 @@ log_drift(){ echo -e "  ${YELLOW}⚠${RESET} $1"; }
 #   dual-role-binary-crates  = ["gtc"]                        # Phase C: subset of binary-crates that also publish a library under the same name
 #   binary-bins              = { "dwbase-cli" = "dwbase" }    # Phase C: per-package [[bin]] name override when bin name != package name.
 #                                                             # Encoded over the wire as comma-separated `pkg=bin` pairs.
+#   dev-exclude-publishes    = ["aw-event-bridge"]            # Crates in `publishes` that exist on main but NOT on develop. greentic-runner
+#                                                             # excludes crates/aw-event-bridge + crates/greentic-aw-runtime from its
+#                                                             # workspace on develop ("main-only crates: not yet integrated"), so
+#                                                             # `cargo publish -p <them>` cannot resolve there. Without this, --check
+#                                                             # reports a false drift and "fixing" it causes a partial publish.
 #   all-features             = false                          # Drop --all-features from dev-prepare's clippy/build/test. For repos
 #                                                             # whose optional features need native libs or private credentials a
 #                                                             # stock runner lacks (greentic-sorx's `foundationdb` needs the FDB
@@ -135,6 +140,18 @@ for name, entry in m.get('repos', {}).items():
     if entry.get('archived', False):
         continue
     publishes = entry.get('publishes', [])
+    if not publishes:
+        continue
+    # The publishes list describes the MAIN lane. Crates named in
+    # dev-exclude-publishes are absent from the develop workspace, so
+    # cargo cannot resolve them there. (No backticks in this heredoc --
+    # it is inside a double-quoted bash string, where they would run as
+    # command substitution.)
+    dev_excluded = set(entry.get('dev-exclude-publishes', []))
+    unknown = dev_excluded - set(publishes)
+    if unknown:
+        sys.exit(f'ERROR: dev-exclude-publishes for {name} lists crates not in publishes: {sorted(unknown)}')
+    publishes = [c for c in publishes if c not in dev_excluded]
     if not publishes:
         continue
     tier = entry.get('tier', 99)
@@ -519,6 +536,10 @@ Source: [REPO_MANIFEST.toml](https://github.com/greenticai/.github/blob/main/too
 }
 
 # ── Main ──────────────────────────────────────────────────────────
+
+# scripts/test_sync_dev_publish_manifest.sh sources this file to unit-test
+# parse_manifest. Stop here so sourcing never touches a repo checkout.
+[[ -n "${SYNC_DEV_PUBLISH_LIB_ONLY:-}" ]] && return 0
 
 echo -e "${BOLD}Greentic Dev-Publish Sync${RESET}"
 echo -e "Target branch: $TARGET_BRANCH"
