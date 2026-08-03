@@ -985,6 +985,11 @@ publishes = ["greentic-sorx-core", "greentic-sorx-pack", "greentic-sorx"]
 binary-crates = ["greentic-sorx"]
 dual-role-binary-crates = ["greentic-sorx"]
 version-track = { from = "0.1", to = "0.2" }
+# `foundationdb` is an optional, default-off feature that needs the FDB
+# client headers/lib at link time; a stock runner has neither, so
+# dev-prepare's --all-features would fail at foundationdb-gen. ci.yml
+# already drops --all-features for the same reason.
+all-features = false
 dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
