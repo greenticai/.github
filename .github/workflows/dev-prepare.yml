@@ -49,6 +49,10 @@ on:
         description: "Space-separated crate names to exclude from build/clippy/test (WASM components that can't build natively)"
         type: string
         default: ""
+      all-features:
+        description: "Pass --all-features to clippy/build/test. Set false for repos whose optional features need native libs or private credentials a stock runner does not have (e.g. greentic-sorx's `foundationdb` feature, which needs the FDB client headers at link time). Mirrors what host-crate-ci.yml callers already do via clippy-args/test-args."
+        type: boolean
+        default: true
       require-pre-release:
         description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
         type: boolean
@@ -108,19 +112,22 @@ jobs:
         run: |
           excludes=""
           for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo clippy --workspace --all-targets --all-features $excludes -- -D warnings
+          features="${{ inputs.all-features && '--all-features' || '' }}"
+          cargo clippy --workspace --all-targets $features $excludes -- -D warnings
 
       - name: build
         run: |
           excludes=""
           for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo build --workspace --all-features $excludes
+          features="${{ inputs.all-features && '--all-features' || '' }}"
+          cargo build --workspace $features $excludes
 
       - name: test
         run: |
           excludes=""
           for c in ${{ inputs.exclude-crates }}; do excludes="$excludes --exclude $c"; done
-          cargo test --workspace --all-features $excludes -- --nocapture
+          features="${{ inputs.all-features && '--all-features' || '' }}"
+          cargo test --workspace $features $excludes -- --nocapture
 
   compute-version:
     name: Compute stamped dev version

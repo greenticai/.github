@@ -116,6 +116,10 @@ log_drift(){ echo -e "  ${YELLOW}⚠${RESET} $1"; }
 #   dual-role-binary-crates  = ["gtc"]                        # Phase C: subset of binary-crates that also publish a library under the same name
 #   binary-bins              = { "dwbase-cli" = "dwbase" }    # Phase C: per-package [[bin]] name override when bin name != package name.
 #                                                             # Encoded over the wire as comma-separated `pkg=bin` pairs.
+#   all-features             = false                          # Drop --all-features from dev-prepare's clippy/build/test. For repos
+#                                                             # whose optional features need native libs or private credentials a
+#                                                             # stock runner lacks (greentic-sorx's `foundationdb` needs the FDB
+#                                                             # client headers at link time). Defaults to true.
 #
 # NOTE: Empty optional fields are emitted as the sentinel `_NONE_`. bash `read`
 # with tab IFS collapses consecutive tab delimiters because tab is whitespace;
@@ -145,10 +149,11 @@ for name, entry in m.get('repos', {}).items():
     binary_bins = ','.join(f'{k}={v}' for k, v in bins_dict.items()) or '_NONE_'
     if '\t' in setup or '\n' in setup:
         sys.exit(f'ERROR: setup-script for {name} must be a single line with no tabs')
-    entries.append((tier, entry['org'], entry['variant'], crates, exclude, setup, binary, dual, binary_bins, name))
+    all_features = 'true' if entry.get('all-features', True) else 'false'
+    entries.append((tier, entry['org'], entry['variant'], crates, exclude, setup, binary, dual, binary_bins, name, all_features))
 entries.sort()
-for tier, org, variant, crates, exclude, setup, binary, dual, binary_bins, name in entries:
-    print(f'{org}\t{variant}\t{tier}\t{crates}\t{exclude}\t{setup}\t{binary}\t{dual}\t{binary_bins}\t{name}')
+for tier, org, variant, crates, exclude, setup, binary, dual, binary_bins, name, all_features in entries:
+    print(f'{org}\t{variant}\t{tier}\t{crates}\t{exclude}\t{setup}\t{binary}\t{dual}\t{binary_bins}\t{name}\t{all_features}')
 "
 }
 
@@ -166,6 +171,7 @@ generate_caller() {
   local binary_crates="$5"
   local dual_role_binary_crates="$6"
   local binary_bins="${7:-}"
+  local all_features="${8:-true}"
 
   # Look up the [[bin]].name override for a given package, from the
   # `binary-bins` manifest field encoded as `pkg=bin,pkg2=bin2`. Echoes
@@ -225,8 +231,12 @@ EOF
   # doesn't complain about an empty `with:` block (it's valid YAML but noisy).
   # `require-pre-release` is the only binary-related input on dev-prepare,
   # and it's gated on dual-role (not binary-only) — so use the same gate here.
-  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$dual_role_binary_crates" ]]; then
+  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$dual_role_binary_crates" || "$all_features" == "false" ]]; then
     echo "    with:"
+  fi
+
+  if [[ "$all_features" == "false" ]]; then
+    echo "      all-features: false"
   fi
 
   if [[ -n "$exclude_crates" ]]; then
@@ -340,6 +350,7 @@ sync_repo() {
   local dual_role_binary_crates="$8"
   local binary_bins="$9"
   local repo_name="${10}"
+  local all_features="${11:-true}"
   local local_dir="${ORG_DIRS[$org]}"
   local repo_path="$local_dir/$repo_name"
   local workflow_path=".github/workflows/dev-publish.yml"
@@ -368,7 +379,7 @@ sync_repo() {
 
   # Generate expected caller content
   local expected
-  expected=$(generate_caller "$crates" "$variant" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins")
+  expected=$(generate_caller "$crates" "$variant" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$all_features")
 
   # Get current caller content from develop (if it exists)
   local current
@@ -525,7 +536,7 @@ fi
 current_tier=""
 
 # Parse manifest and process repos (sorted by tier)
-while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script binary_crates dual_role_binary_crates binary_bins repo_name; do
+while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script binary_crates dual_role_binary_crates binary_bins repo_name all_features; do
   # Strip sentinel back to empty string (see parse_manifest note).
   [[ "$exclude_crates"          == "_NONE_" ]] && exclude_crates=""
   [[ "$setup_script"            == "_NONE_" ]] && setup_script=""
@@ -550,7 +561,7 @@ while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script bina
   fi
 
   echo -e "${CYAN}${BOLD}[$org/$repo_name]${RESET} (tier $tier, $variant)"
-  sync_repo "$org" "$variant" "$tier" "$crates" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$repo_name"
+  sync_repo "$org" "$variant" "$tier" "$crates" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$repo_name" "$all_features"
 done < <(parse_manifest)
 
 # ── Summary ───────────────────────────────────────────────────────
