@@ -4,7 +4,8 @@
 # Dispatches dev-publish.yml across repos in tier order (0→9).
 # Repos within a tier are dispatched in parallel, then waited on.
 # Change-aware: skips repos with no source or upstream changes.
-# Flake-tolerant: re-runs a downstream run whose jobs GitHub never scheduled.
+# Flake-tolerant: re-runs a downstream run whose jobs GitHub never scheduled,
+# and recovers from runs GitHub evicts from the concurrency queue.
 #
 # Environment:
 #   GREENTIC_CI_APP_ID           — App ID for token minting (required in CI)
@@ -39,6 +40,8 @@ DISPATCH_TIMEOUT=24 # max polls to detect dispatched run (24*5s = 2min)
 TOKEN_REFRESH_SEC=2700  # re-mint at 45 min — leaves 15 min headroom on 1h TTL
 UNSCHEDULED_RETRIES=1   # re-runs allowed per run when GitHub never schedules a job
 UNSCHEDULED_GRACE=1800  # seconds added to a tier's wait budget per re-run
+EVICTION_RECOVERIES=3   # times a repo may be recovered from a concurrency eviction
+SUCCESSOR_SCAN=20       # runs to scan when looking for the run that evicted ours
 
 FORCE="${INPUT_FORCE:-false}"
 TIER_FILTER="${INPUT_TIER:-}"
@@ -360,6 +363,65 @@ rerun_failed_jobs() {
   gh run rerun "$run_id" --repo "$repo" --failed >/dev/null 2>&1
 }
 
+# ── Concurrency-eviction detection ───────────────────────────────
+# Every dev-publish.yml caller declares
+#   concurrency: { group: <workflow>-<ref>, cancel-in-progress: false }
+# so a run never kills one that is already executing. GitHub does, however,
+# keep at most ONE run pending per group: when a push to develop lands while
+# our dispatched run is still queued, the queued run is evicted and concludes
+# `cancelled` without a single job ever being created.
+#
+# That is invisible in the run-level conclusion — a human cancelling a live
+# run also yields `cancelled`. The discriminator is the job count: an evicted
+# run has zero jobs, so nothing was built, nothing was published, and there is
+# no partial state to reason about.
+#
+# Repos whose dev-publish takes longer than the interval between pushes to
+# develop (greentic-designer: 64–158 min per run) would otherwise fail the
+# nightly every single time, because every queued run is evicted before it
+# starts.
+run_was_evicted() {
+  local repo="$1"
+  local run_id="$2"
+
+  use_token_for_repo "$repo" || return 1
+
+  local total
+  total=$(gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=1" \
+    --jq '.total_count // 0' 2>/dev/null) || return 1
+
+  # An unreadable count must never read as "evicted" — that would license
+  # re-dispatching a run that may have published.
+  [[ "$total" =~ ^[0-9]+$ ]] || return 1
+  [[ "$total" -eq 0 ]]
+}
+
+# The run that evicted ours targets the same workflow and the same branch, so
+# waiting on it is equivalent to waiting on ours — and strictly better, since
+# it carries an equal or newer develop SHA. Re-dispatching instead would just
+# join the back of the same queue and be evicted again.
+#
+# Returns the OLDEST run above $after_id so we follow the actual evictor
+# rather than skipping ahead. Runs that were themselves evicted (`cancelled`)
+# are not worth following; a `failure` successor IS returned so the tier
+# reports the real failure instead of re-dispatching around it.
+find_successor_run() {
+  local repo="$1"
+  local after_id="$2"
+
+  use_token_for_repo "$repo" || return 1
+  [[ "$after_id" =~ ^[0-9]+$ ]] || return 1
+
+  gh run list --repo "$repo" --workflow "$WORKFLOW" --branch "$BRANCH" \
+    --limit "$SUCCESSOR_SCAN" --json databaseId,status,conclusion \
+    --jq "[ .[]
+            | select(.databaseId > $after_id)
+            | select(.conclusion == null
+                     or .conclusion == \"success\"
+                     or .conclusion == \"failure\") ]
+          | sort_by(.databaseId) | .[0].databaseId // empty" 2>/dev/null
+}
+
 # ── Wait for multiple runs ───────────────────────────────────────
 # Args: "org/repo:run_id" entries. Returns 0 if all succeeded.
 wait_for_all() {
@@ -370,7 +432,13 @@ wait_for_all() {
   local -A done_map=()
   local -A retry_count=()
   local -A retry_attempt=()
+  local -A evict_count=()
+  # An entry's run ID changes when we follow an evictor or re-dispatch, so the
+  # original "repo:run_id" string stays the stable key while current_run holds
+  # the run actually being polled.
+  local -A current_run=()
   local any_failed=false
+  local new_id successor
 
   while true; do
     local pending=0
@@ -379,7 +447,7 @@ wait_for_all() {
       [[ -n "${done_map[$entry]:-}" ]] && continue
 
       local repo="${entry%%:*}"
-      local run_id="${entry##*:}"
+      local run_id="${current_run[$entry]:-${entry##*:}}"
       local name="${repo##*/}"
 
       # Refresh-aware token select per repo so long polls don't 401 on
@@ -431,6 +499,34 @@ wait_for_all() {
             done_map["$entry"]=1
             log "    ✗ $name — could not re-run unscheduled jobs (run $run_id)"
             err "$name dev-publish could not be re-run — https://github.com/$repo/actions/runs/$run_id"
+            any_failed=true
+          fi
+        elif [[ "$conclusion" == "cancelled" \
+                && "${evict_count[$entry]:-0}" -lt "$EVICTION_RECOVERIES" ]] \
+             && run_was_evicted "$repo" "$run_id"; then
+          # Nothing ran, so there is no partial publish to reason about.
+          # Prefer following the run that evicted ours: re-dispatching would
+          # just rejoin the same queue and be evicted by the next push.
+          evict_count["$entry"]=$(( ${evict_count[$entry]:-0} + 1 ))
+          unset "retry_attempt[$entry]"
+          successor=$(find_successor_run "$repo" "$run_id") || successor=""
+
+          if [[ -n "$successor" ]]; then
+            current_run["$entry"]=$successor
+            max_wait=$((max_wait + UNSCHEDULED_GRACE))
+            log "    ↻ $name — evicted from the concurrency queue; following run $successor"
+            warn "$name dev-publish was evicted by a newer $BRANCH run — following run $successor"
+            ((pending++)) || true
+          elif new_id=$(dispatch "$repo"); then
+            current_run["$entry"]=$new_id
+            max_wait=$((max_wait + UNSCHEDULED_GRACE))
+            log "    ↻ $name — evicted from the concurrency queue; re-dispatched run $new_id"
+            warn "$name dev-publish was evicted from the concurrency queue — re-dispatched (run $new_id)"
+            ((pending++)) || true
+          else
+            done_map["$entry"]=1
+            log "    ✗ $name — evicted, and could not be re-dispatched (run $run_id)"
+            err "$name dev-publish was evicted and could not be re-dispatched — https://github.com/$repo/actions/runs/$run_id"
             any_failed=true
           fi
         else
