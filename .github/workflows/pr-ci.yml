@@ -238,7 +238,27 @@ jobs:
               CLIPPY_ARGS='--workspace --all-targets --all-features -- -D warnings'
             fi
           fi
-          echo "args=${CLIPPY_ARGS}" >> "$GITHUB_OUTPUT"
+          # --locked, but only where it can possibly hold: it is added ONLY when
+          # Cargo.lock is actually tracked by git. Three repos in the fleet
+          # (greentic-llm, greentic-llm-extensions, greentic-triggers) gitignore
+          # their lockfile by design -- they are libraries, and Cargo does not
+          # require one. A blanket --locked would fail those repos with
+          # "cannot create the lock file" through no fault of theirs, so this
+          # self-adapts instead of relying on an opt-out list nobody maintains.
+          #
+          # Why it matters: without --locked, cargo silently regenerates
+          # Cargo.lock in-place during CI, so a lockfile that disagrees with
+          # Cargo.toml never surfaces. That is exactly how greenticai/greentic-cap
+          # shipped a Cargo.lock pinning 0.5.2 while Cargo.toml said 1.1.0 (fixed
+          # in greentic-cap#40), and how greentic-operax lost an entire dependency
+          # subtree from its lock (greentic-operax#17).
+          LOCKED=""
+          if git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then
+            LOCKED="--locked "
+          fi
+          # Prefix, not suffix: clippy args end in `-- -D warnings`, and anything
+          # after `--` is passed to rustc rather than cargo.
+          echo "args=${LOCKED}${CLIPPY_ARGS}" >> "$GITHUB_OUTPUT"
       - run: cargo clippy ${{ steps.clippy_args.outputs.args }}
 
   test:
@@ -284,7 +304,25 @@ jobs:
               TEST_ARGS='--workspace --all-features'
             fi
           fi
-          echo "args=${TEST_ARGS}" >> "$GITHUB_OUTPUT"
+          # --locked, but only where it can possibly hold: it is added ONLY when
+          # Cargo.lock is actually tracked by git. Three repos in the fleet
+          # (greentic-llm, greentic-llm-extensions, greentic-triggers) gitignore
+          # their lockfile by design -- they are libraries, and Cargo does not
+          # require one. A blanket --locked would fail those repos with
+          # "cannot create the lock file" through no fault of theirs, so this
+          # self-adapts instead of relying on an opt-out list nobody maintains.
+          #
+          # Why it matters: without --locked, cargo silently regenerates
+          # Cargo.lock in-place during CI, so a lockfile that disagrees with
+          # Cargo.toml never surfaces. That is exactly how greenticai/greentic-cap
+          # shipped a Cargo.lock pinning 0.5.2 while Cargo.toml said 1.1.0 (fixed
+          # in greentic-cap#40), and how greentic-operax lost an entire dependency
+          # subtree from its lock (greentic-operax#17).
+          LOCKED=""
+          if git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then
+            LOCKED="--locked "
+          fi
+          echo "args=${LOCKED}${TEST_ARGS}" >> "$GITHUB_OUTPUT"
       - run: cargo test ${{ steps.test_args.outputs.args }}
 
   wasm:
