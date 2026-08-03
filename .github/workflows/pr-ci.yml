@@ -309,6 +309,19 @@ jobs:
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install cargo-component
         if: ${{ inputs.use-cargo-component }}
+        env:
+          # Unauthenticated api.github.com lookups are rate-limited per runner IP.
+          # On a 403 binstall does not fail -- it silently degrades to building from
+          # source, costing ~10 minutes with nothing in the log naming the real cause.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # NOTE: `--disable-strategies compile` is deliberately NOT set here.
+        # cargo-component v0.21.x publishes NO release assets upstream, so the only
+        # prebuilt path is cargo-quickinstall, a third-party build service. Removing
+        # the compile fallback would make every PR in every consumer repo fail the
+        # moment `cargo-component-version` is bumped to a version quickinstall has
+        # not built yet. A slow install beats a fleet-wide PR outage.
+        # Before bumping that input, check:
+        #   https://github.com/cargo-bins/cargo-quickinstall/releases/tag/cargo-component-<version>
         run: cargo binstall -y cargo-component@${{ inputs.cargo-component-version }} --force
       - name: Check (wasm32-wasip2)
         run: |
@@ -326,7 +339,15 @@ jobs:
           fi
       - name: Install wasm-tools
         if: ${{ inputs.validate-component }}
-        run: cargo binstall -y wasm-tools --force
+        env:
+          # See the cargo-component step above for why the token matters.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Safe to forbid the source fallback here: wasm-tools declares
+        # [package.metadata.binstall] pointing at its own first-party GitHub
+        # releases, which ship an x86_64-linux archive for every version.
+        run: |
+          cargo binstall -y wasm-tools --force --disable-strategies compile
+          command -v wasm-tools
       - name: Validate component
         if: ${{ inputs.validate-component }}
         shell: bash
