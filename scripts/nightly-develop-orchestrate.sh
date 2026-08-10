@@ -20,7 +20,7 @@
 #   easily run >1h (long binary repos in tier 7 alone routinely take 15 min).
 #   Once the seed token expires mid-run, every `gh run view` poll returns
 #   401, wait_for_all interprets that as "still pending", and the tier
-#   stalls until MAX_WAIT (7200s) before being declared a phantom timeout.
+#   stalls until MAX_WAIT before being declared a phantom timeout.
 #   Re-minting on demand here means the script is robust to its own length.
 #   It also lets a single script touch both greenticai and greentic-biz
 #   repos (one App, two installations) without the workflow having to
@@ -34,7 +34,20 @@ MANIFEST="${MANIFEST:-toolchain/REPO_MANIFEST.toml}"
 WORKFLOW="dev-publish.yml"
 BRANCH="develop"
 POLL_INTERVAL=30    # seconds between status polls
-MAX_WAIT=7200       # max seconds to wait per tier (2 hours)
+# 3 hours, not 2. The slowest caller in the fleet is greentic-designer's
+# `Dev Publish`, and 7200 sat BELOW its ordinary duration rather than above it:
+# successful runs on 2026-08-04/05 took 122, 127, 128, 102, 105 and 108 minutes,
+# so four of six would have missed a 2-hour budget on their own. Run 30977393630
+# is the clean demonstration — the orchestrator gave up at 7200s and the run it
+# was waiting on concluded SUCCESSFULLY three minutes later.
+#
+# Queue time is inside this budget too, and it is not small: in run 31353719510
+# designer was dispatched at 04:31 and its first job was not created until
+# 06:07 — 96 minutes of waiting before any work started.
+#
+# This is a polling loop in the orchestrator job, so raising it costs one idle
+# runner-hour at worst. It buys nothing to set it below the thing it waits for.
+MAX_WAIT=10800      # max seconds to wait per tier (3 hours)
 DISPATCH_DETECT=5   # seconds between dispatch detection polls
 DISPATCH_TIMEOUT=24 # max polls to detect dispatched run (24*5s = 2min)
 TOKEN_REFRESH_SEC=2700  # re-mint at 45 min — leaves 15 min headroom on 1h TTL
