@@ -44,7 +44,7 @@ jobs:
       # Orchestrate mints (and refreshes) per-org App tokens itself from the
       # App credentials below — runs commonly exceed the 1-hour App-token TTL,
       # so a single upfront create-github-app-token@v2 mint would expire mid-run
-      # and stall wait_for_all in 401 polls until MAX_WAIT (3600s) fires.
+      # and stall wait_for_all in 401 polls until MAX_WAIT fires.
       - name: Orchestrate dev publishing
         id: run
         env:
