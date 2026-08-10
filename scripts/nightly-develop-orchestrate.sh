@@ -315,18 +315,29 @@ dispatch() {
   return 1
 }
 
-# ── Unscheduled-job detection ────────────────────────────────────
-# GitHub occasionally fails to hand a queued job to a hosted runner ("The job
-# was not acquired by Runner of type hosted even after multiple attempts").
-# Such a job is marked `cancelled` with no runner and no steps, and the run
-# concludes `failure`. Nothing executed, so nothing was published — re-running
-# it is safe.
+# ── "Nothing executed" detection ─────────────────────────────────
+# Two unrelated GitHub behaviours leave a job `cancelled` with no runner and no
+# steps, and both mean the same thing: that leg never ran, so it published
+# nothing and there is no partial state to reason about.
+#
+#   1. No runner was ever acquired ("The job was not acquired by Runner of type
+#      hosted even after multiple attempts"). The run concludes `failure`.
+#
+#   2. The job was evicted from a JOB-level concurrency group. A caller can
+#      declare `concurrency:` on one expensive job, and GitHub keeps at most one
+#      pending job per group — a newer push takes the slot and drops ours. The
+#      run concludes `cancelled`, but WITH jobs, so `run_was_evicted` (which
+#      keys on a zero job count) cannot see it.
+#
+# Case 2 observed 2026-08-10 on greentic-designer run 31355734469: `ci / lint`
+# and both `ci / web` legs succeeded while `ci / test` — which carries
+# `concurrency: {group: ci-test-<ref>}` — sat pending for 10 minutes and was
+# then dropped for a newer develop push. The nightly halted tier 8 on it.
 #
 # Returns 0 only when *every* non-success job in the latest attempt never
 # started, so a run that also contains a genuine failure is never mistaken for
-# a flake. Callers additionally gate on a run-level `failure` conclusion; a
-# human-cancelled run concludes `cancelled` and is therefore never re-run.
-is_unscheduled_flake() {
+# either case. Callers pick the recovery that suits their run-level conclusion.
+non_success_jobs_never_started() {
   local repo="$1"
   local run_id="$2"
 
@@ -334,7 +345,7 @@ is_unscheduled_flake() {
 
   gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" --jq '
     # A truncated page would hide a genuine failure from all() below, so a run
-    # with more jobs than this page carries is never treated as a flake.
+    # with more jobs than this page carries is never treated as recoverable.
     (.total_count // (.jobs | length)) as $total
     | if $total > (.jobs | length) then false
       else
@@ -416,7 +427,13 @@ find_successor_run() {
     --limit "$SUCCESSOR_SCAN" --json databaseId,status,conclusion \
     --jq "[ .[]
             | select(.databaseId > $after_id)
-            | select(.conclusion == null
+            # A run that has not concluded is spelled \"\" by \`gh run list\`
+            # and null by \`gh api\`. Matching only null — as this filter did
+            # until 2026-08-10 — silently skipped every in-flight successor,
+            # which is the only kind that exists at the moment of an eviction,
+            # so the whole successor path never fired and every eviction fell
+            # through to a re-dispatch that rejoined the same queue.
+            | select((.conclusion // \"\") == \"\"
                      or .conclusion == \"success\"
                      or .conclusion == \"failure\") ]
           | sort_by(.databaseId) | .[0].databaseId // empty" 2>/dev/null
@@ -487,7 +504,7 @@ wait_for_all() {
           ((pending++)) || true
         elif [[ "$conclusion" == "failure" \
                 && "${retry_count[$entry]:-0}" -lt "$UNSCHEDULED_RETRIES" ]] \
-             && is_unscheduled_flake "$repo" "$run_id"; then
+             && non_success_jobs_never_started "$repo" "$run_id"; then
           if rerun_failed_jobs "$repo" "$run_id"; then
             retry_count["$entry"]=$(( ${retry_count[$entry]:-0} + 1 ))
             retry_attempt["$entry"]=$attempt
@@ -503,8 +520,13 @@ wait_for_all() {
           fi
         elif [[ "$conclusion" == "cancelled" \
                 && "${evict_count[$entry]:-0}" -lt "$EVICTION_RECOVERIES" ]] \
-             && run_was_evicted "$repo" "$run_id"; then
-          # Nothing ran, so there is no partial publish to reason about.
+             && { run_was_evicted "$repo" "$run_id" \
+                  || non_success_jobs_never_started "$repo" "$run_id"; }; then
+          # Nothing that could publish ran: either the whole run was dropped
+          # from the queue before a single job was created, or the only
+          # non-green legs were evicted from a job-level concurrency group
+          # before acquiring a runner. Neither leaves partial state.
+          #
           # Prefer following the run that evicted ours: re-dispatching would
           # just rejoin the same queue and be evicted by the next push.
           evict_count["$entry"]=$(( ${evict_count[$entry]:-0} + 1 ))
@@ -517,16 +539,27 @@ wait_for_all() {
             log "    ↻ $name — evicted from the concurrency queue; following run $successor"
             warn "$name dev-publish was evicted by a newer $BRANCH run — following run $successor"
             ((pending++)) || true
-          elif new_id=$(dispatch "$repo"); then
+          elif run_was_evicted "$repo" "$run_id" && new_id=$(dispatch "$repo"); then
             current_run["$entry"]=$new_id
             max_wait=$((max_wait + UNSCHEDULED_GRACE))
             log "    ↻ $name — evicted from the concurrency queue; re-dispatched run $new_id"
             warn "$name dev-publish was evicted from the concurrency queue — re-dispatched (run $new_id)"
             ((pending++)) || true
+          elif rerun_failed_jobs "$repo" "$run_id"; then
+            # A JOB-level eviction leaves this run's other jobs SUCCEEDED, and
+            # on a publishing repo one of those may already have pushed a
+            # crate. Re-running only the evicted legs reuses this run — and so
+            # the version it stamped — where a fresh dispatch would stamp a new
+            # one and try to publish the same crate twice.
+            retry_attempt["$entry"]=$attempt
+            max_wait=$((max_wait + UNSCHEDULED_GRACE))
+            log "    ↻ $name — evicted leg; re-running it in run $run_id"
+            warn "$name dev-publish had a leg evicted from a job-level concurrency group — re-running it (run $run_id)"
+            ((pending++)) || true
           else
             done_map["$entry"]=1
-            log "    ✗ $name — evicted, and could not be re-dispatched (run $run_id)"
-            err "$name dev-publish was evicted and could not be re-dispatched — https://github.com/$repo/actions/runs/$run_id"
+            log "    ✗ $name — evicted, and could not be recovered (run $run_id)"
+            err "$name dev-publish was evicted and could not be recovered — https://github.com/$repo/actions/runs/$run_id"
             any_failed=true
           fi
         else
