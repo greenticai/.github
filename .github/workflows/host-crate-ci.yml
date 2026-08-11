@@ -52,6 +52,14 @@ on:
         description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
         type: string
         default: "ubuntu-latest"
+      cache-save-on-pr:
+        description: "Forwarded to pr-ci.yml. Let pull_request runs SAVE a rust-cache entry, not just restore one. Default false; see the cache-budget note in pr-ci.yml."
+        type: boolean
+        default: false
+      min-free-disk-gb:
+        description: "Forwarded to pr-ci.yml. Only reclaim preinstalled tooling when / has less than this many GB free. Default 40; see the note on the Free disk space step in pr-ci.yml."
+        type: number
+        default: 40
 
 permissions:
   contents: read
@@ -73,6 +81,8 @@ jobs:
       toolchain-variant: ${{ inputs.toolchain-variant }}
       checkout-submodules: ${{ inputs.checkout-submodules }}
       runner: ${{ inputs.runner }}
+      cache-save-on-pr: ${{ inputs.cache-save-on-pr }}
+      min-free-disk-gb: ${{ inputs.min-free-disk-gb }}
 
   semver-checks:
     # Advisory mode: reports breaking changes as warnings, never fails the job.
@@ -94,6 +104,10 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Same rationale as pr-ci.yml: PRs restore, pushes save. See the
+          # cache-budget note in pr-ci.yml's header.
+          save-if: ${{ inputs.cache-save-on-pr || github.event_name != 'pull_request' }}
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - name: Resolve semver baseline

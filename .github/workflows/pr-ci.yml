@@ -13,6 +13,39 @@ name: PR CI (baseline)
 # graph-build time, even when gated off via `run-dependency-review: false` —
 # GitHub validates nested-reusable permissions before `if:` evaluation. See
 # the regression post-mortem that motivated this split (PR #94 fallout).
+#
+# ── Actions-cache scoping and budget (read before touching rust-cache) ──
+#
+# GitHub scopes Actions caches by ref. A run may restore an entry created on
+# its OWN ref, on its PR BASE branch, or on the repository DEFAULT branch —
+# nothing else. Two consequences shape the config below.
+#
+# 1. A caller whose ci.yml triggers on `pull_request` only never seeds a
+#    restorable entry: `main` saves nothing, and each PR's save lands on
+#    `refs/pull/N/merge`, a scope no other PR reads. Measured on
+#    greentic-start 2026-07-30, 30/30 recent ci.yml runs were `pull_request`
+#    and the restore step said "No cache found." on a first run every time —
+#    ~370s of the 401s `cargo test` step was dependency compilation. Callers
+#    therefore want `push: branches: [main]` in their own ci.yml;
+#    greentic-deployer, greentic-start and greentic-setup have it.
+#
+# 2. The cache limit is 10 GB PER REPOSITORY, and it binds. On 2026-07-30
+#    greentic-start held 10.38 GB across 8 entries and greentic-setup
+#    10.59 GB across 11 — both over, so entries were being evicted within
+#    ~30 minutes of being written. A single test-job entry is ~1.6 GB and a
+#    clippy entry ~0.77 GB, so every concurrent PR was burning ~2.4 GB of a
+#    10 GB budget on entries only that PR could ever read, evicting the
+#    default-branch entry every other run needs. Hence `save-if` below
+#    (PRs restore, pushes save) and the debug-info trim in `env` (smaller
+#    entries survive longer and upload/download faster).
+#
+# Do NOT give clippy and test a shared `shared-key`. rust-cache's default key
+# includes the job name, which is what keeps them separate. Sharing one key
+# would make both jobs race to reserve the same entry; the loser logs
+# "Failed to save" and the survivor is whichever finished first — usually
+# clippy, whose target dir has no codegen artifacts. Every later test job
+# would then restore a clippy-shaped cache and re-codegen the whole
+# dependency graph. Two keys cost ~0.8 GB more budget and are worth it.
 
 on:
   workflow_call:
@@ -49,6 +82,14 @@ on:
         description: "Linux runner label (e.g. blacksmith-4vcpu-ubuntu-2404-arm for Blacksmith ARM)"
         type: string
         default: "ubuntu-latest"
+      cache-save-on-pr:
+        description: "Let pull_request runs SAVE a rust-cache entry, not just restore one. Default false — see the cache-scoping note in the header. Set true only to restore the old behaviour for a repo that regresses."
+        type: boolean
+        default: false
+      min-free-disk-gb:
+        description: "Only reclaim preinstalled tooling when / has less than this many GB free. Current GitHub-hosted images start with ~88 GB free, so the default of 40 skips a 70-90s no-op. Raise (e.g. 9999) to always reclaim; 0 to never."
+        type: number
+        default: 40
       # ── wasm-only inputs ────────────────────────────────────────────
       use-cargo-component:
         description: "Use 'cargo component build' instead of 'cargo build' (wasm only)"
@@ -106,6 +147,26 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Debug info dominates target-dir size, and target-dir size is what makes the
+  # cache entries big (see the budget note in the header) and slow to upload.
+  # `line-tables-only` keeps the file/line tables, so panic backtraces in CI
+  # still resolve to real source locations; it drops only the variable/type
+  # DWARF that a debugger would want and CI never reads. Measured locally on
+  # greentic-start (`cargo test --no-run -p greentic-start --all-features`,
+  # cold target dir, CARGO_INCREMENTAL=0): 8.16 GiB -> 6.02 GiB (-26%) and
+  # 3m42s -> 3m08s (-15%). greentic-mcp already pins the same value in its own
+  # `[profile.test]`, so this generalises what that repo proved out.
+  #
+  # These are env-level so they override a caller's `[profile]` without
+  # touching RUSTFLAGS (setting RUSTFLAGS here would silently discard any
+  # `[build] rustflags` a caller has in .cargo/config.toml). `--release`
+  # builds are unaffected: profile `release` already defaults to debug = 0.
+  #
+  # NOTE: rust-cache hashes CARGO_*/RUST* env vars into its key, so landing
+  # this invalidates every existing entry once. One cold run per job, then
+  # steady state.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   # Phase 4a guard: PRs targeting main MUST NOT carry pre-release version
@@ -201,15 +262,50 @@ jobs:
           submodules: ${{ inputs.checkout-submodules }}
       - name: Free disk space
         shell: bash
+        env:
+          MIN_FREE_GB: ${{ inputs.min-free-disk-gb }}
         run: |
-          # Reclaim ~12-15 GB of preinstalled tooling the Rust build never uses
-          # (dotnet, Haskell, CodeQL, Android, boost). A --workspace
+          set -euo pipefail
+          # Reclaim preinstalled tooling the Rust build never uses (dotnet,
+          # Haskell, CodeQL, Android, boost). This exists because a --workspace
           # --all-features clippy/test build of a large workspace (e.g.
-          # greentic-deployer) otherwise exhausts the GitHub-hosted runner disk
-          # mid-run; the runner is killed before it can even upload logs, which
-          # surfaces as an unexplained, intermittent job failure. Best-effort:
-          # no-ops on runners lacking these paths or passwordless sudo.
+          # greentic-deployer) once exhausted the GitHub-hosted runner disk
+          # mid-run; the runner is killed before it can upload logs, which
+          # surfaces as an unexplained, intermittent job failure.
+          #
+          # It is now gated on MEASURED free space, because the `sudo rm -rf`
+          # costs 21-87s in every clippy and test job and the premise no longer
+          # holds. Eleven samples on 2026-07-30, median ~50s: greentic-start
+          # test 70/66/24/22s and clippy 87/66/29s, greentic-setup test 67/27s
+          # and clippy 74/32s, greentic-deployer test 21s. It is highly variable
+          # because it is bound by runner I/O, not by the amount deleted. All
+          # three repos report the same image on `ubuntu-latest`:
+          #
+          #     /dev/root  145G  58G  88G  40% /     (before)
+          #     /dev/root  145G  40G  105G 28% /     (after, 18 GB reclaimed)
+          #
+          # 88 GB free is far more than any target dir in this org: a cold
+          # `cargo test --no-run -p greentic-start --all-features` target dir
+          # measures ~8 GiB, and less with the debug-info trim in `env`. So the
+          # cleanup was buying 18 GB of headroom nobody needed, twice per run,
+          # in ~30 caller repos.
+          #
+          # The guard is self-healing rather than a deletion: if GitHub ever
+          # ships a smaller image, or a workspace really does grow into the
+          # headroom, `avail < MIN_FREE_GB` trips and the cleanup comes back on
+          # its own. Raise min-free-disk-gb to force it (9999 = always, the old
+          # behaviour); 0 disables it. The "Disk usage after build" step below
+          # reports the real high-water mark so the threshold stays evidence-based.
           df -h /
+          # POSIX `df -Pk` rather than `df --output=avail`: portable to any
+          # runner label a caller passes via `runner:`.
+          avail=$(df -Pk / | awk 'NR==2 {print int($4 / 1024 / 1024)}')
+          if [ "${avail}" -ge "${MIN_FREE_GB}" ]; then
+            echo "${avail} GB free on / >= ${MIN_FREE_GB} GB threshold — skipping cleanup."
+            exit 0
+          fi
+          echo "${avail} GB free on / < ${MIN_FREE_GB} GB threshold — reclaiming preinstalled tooling."
+          # Best-effort: no-ops on runners lacking these paths or passwordless sudo.
           sudo rm -rf \
             /usr/share/dotnet \
             /opt/ghc \
@@ -223,6 +319,17 @@ jobs:
           components: clippy
           targets: ${{ inputs.variant == 'wasm' && 'wasm32-wasip2' || '' }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          # PRs RESTORE but do not SAVE. See the cache-budget note in the
+          # header: a PR's own entry is scoped to `refs/pull/N/merge`, so only
+          # that PR can ever read it, yet it competes for the same 10 GB
+          # repository budget as the default-branch entry every run restores
+          # from. greentic-start sat at 10.38 GB against the 10 GB limit, with ~2.4 GB
+          # of it held by a single open PR. The cost is that a re-push to a PR no
+          # longer restores that PR's own previous entry — but once the default
+          # branch is warm the dependency set is the same, and rust-cache falls
+          # back through its restore-keys prefix when Cargo.lock differs.
+          save-if: ${{ inputs.cache-save-on-pr || github.event_name != 'pull_request' }}
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - name: Resolve clippy args
@@ -240,6 +347,10 @@ jobs:
           fi
           echo "args=${CLIPPY_ARGS}" >> "$GITHUB_OUTPUT"
       - run: cargo clippy ${{ steps.clippy_args.outputs.args }}
+      - name: Disk usage after build
+        if: always()
+        shell: bash
+        run: df -h /
 
   test:
     runs-on: ${{ inputs.runner }}
@@ -249,15 +360,50 @@ jobs:
           submodules: ${{ inputs.checkout-submodules }}
       - name: Free disk space
         shell: bash
+        env:
+          MIN_FREE_GB: ${{ inputs.min-free-disk-gb }}
         run: |
-          # Reclaim ~12-15 GB of preinstalled tooling the Rust build never uses
-          # (dotnet, Haskell, CodeQL, Android, boost). A --workspace
+          set -euo pipefail
+          # Reclaim preinstalled tooling the Rust build never uses (dotnet,
+          # Haskell, CodeQL, Android, boost). This exists because a --workspace
           # --all-features clippy/test build of a large workspace (e.g.
-          # greentic-deployer) otherwise exhausts the GitHub-hosted runner disk
-          # mid-run; the runner is killed before it can even upload logs, which
-          # surfaces as an unexplained, intermittent job failure. Best-effort:
-          # no-ops on runners lacking these paths or passwordless sudo.
+          # greentic-deployer) once exhausted the GitHub-hosted runner disk
+          # mid-run; the runner is killed before it can upload logs, which
+          # surfaces as an unexplained, intermittent job failure.
+          #
+          # It is now gated on MEASURED free space, because the `sudo rm -rf`
+          # costs 21-87s in every clippy and test job and the premise no longer
+          # holds. Eleven samples on 2026-07-30, median ~50s: greentic-start
+          # test 70/66/24/22s and clippy 87/66/29s, greentic-setup test 67/27s
+          # and clippy 74/32s, greentic-deployer test 21s. It is highly variable
+          # because it is bound by runner I/O, not by the amount deleted. All
+          # three repos report the same image on `ubuntu-latest`:
+          #
+          #     /dev/root  145G  58G  88G  40% /     (before)
+          #     /dev/root  145G  40G  105G 28% /     (after, 18 GB reclaimed)
+          #
+          # 88 GB free is far more than any target dir in this org: a cold
+          # `cargo test --no-run -p greentic-start --all-features` target dir
+          # measures ~8 GiB, and less with the debug-info trim in `env`. So the
+          # cleanup was buying 18 GB of headroom nobody needed, twice per run,
+          # in ~30 caller repos.
+          #
+          # The guard is self-healing rather than a deletion: if GitHub ever
+          # ships a smaller image, or a workspace really does grow into the
+          # headroom, `avail < MIN_FREE_GB` trips and the cleanup comes back on
+          # its own. Raise min-free-disk-gb to force it (9999 = always, the old
+          # behaviour); 0 disables it. The "Disk usage after build" step below
+          # reports the real high-water mark so the threshold stays evidence-based.
           df -h /
+          # POSIX `df -Pk` rather than `df --output=avail`: portable to any
+          # runner label a caller passes via `runner:`.
+          avail=$(df -Pk / | awk 'NR==2 {print int($4 / 1024 / 1024)}')
+          if [ "${avail}" -ge "${MIN_FREE_GB}" ]; then
+            echo "${avail} GB free on / >= ${MIN_FREE_GB} GB threshold — skipping cleanup."
+            exit 0
+          fi
+          echo "${avail} GB free on / < ${MIN_FREE_GB} GB threshold — reclaiming preinstalled tooling."
+          # Best-effort: no-ops on runners lacking these paths or passwordless sudo.
           sudo rm -rf \
             /usr/share/dotnet \
             /opt/ghc \
@@ -269,6 +415,17 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          # PRs RESTORE but do not SAVE. See the cache-budget note in the
+          # header: a PR's own entry is scoped to `refs/pull/N/merge`, so only
+          # that PR can ever read it, yet it competes for the same 10 GB
+          # repository budget as the default-branch entry every run restores
+          # from. greentic-start sat at 10.38 GB against the 10 GB limit, with ~2.4 GB
+          # of it held by a single open PR. The cost is that a re-push to a PR no
+          # longer restores that PR's own previous entry — but once the default
+          # branch is warm the dependency set is the same, and rust-cache falls
+          # back through its restore-keys prefix when Cargo.lock differs.
+          save-if: ${{ inputs.cache-save-on-pr || github.event_name != 'pull_request' }}
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - name: Resolve test args
@@ -286,6 +443,10 @@ jobs:
           fi
           echo "args=${TEST_ARGS}" >> "$GITHUB_OUTPUT"
       - run: cargo test ${{ steps.test_args.outputs.args }}
+      - name: Disk usage after build
+        if: always()
+        shell: bash
+        run: df -h /
 
   wasm:
     if: inputs.variant == 'wasm'
@@ -299,6 +460,17 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
+        with:
+          # PRs RESTORE but do not SAVE. See the cache-budget note in the
+          # header: a PR's own entry is scoped to `refs/pull/N/merge`, so only
+          # that PR can ever read it, yet it competes for the same 10 GB
+          # repository budget as the default-branch entry every run restores
+          # from. greentic-start sat at 10.38 GB against the 10 GB limit, with ~2.4 GB
+          # of it held by a single open PR. The cost is that a re-push to a PR no
+          # longer restores that PR's own previous entry — but once the default
+          # branch is warm the dependency set is the same, and rust-cache falls
+          # back through its restore-keys prefix when Cargo.lock differs.
+          save-if: ${{ inputs.cache-save-on-pr || github.event_name != 'pull_request' }}
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
       - name: Install cargo-binstall
