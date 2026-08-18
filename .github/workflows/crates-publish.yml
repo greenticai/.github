@@ -35,6 +35,24 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Restore the cache, never save it. This job runs once per release
+          # tag, so a saved cache is near worthless — and skipping the save
+          # also skips rust-cache's post-job cleanup, which is what emits
+          # eight ##[error] lines after an otherwise successful publish.
+          #
+          # cleanup.ts treats any directory basenamed `tests` as a build
+          # profile dir and probes `tests/target` + `tests/trybuild` inside
+          # it. `cargo publish` leaves target/package/<crate>-<ver>/tests/
+          # behind, which is a plain source dir, so both probes ENOENT. The
+          # try/catch around them does not help: cleanTargetDir is async and
+          # is called without await, so the rejection escapes the synchronous
+          # try block and surfaces as an unhandled rejection.
+          #
+          # Publishing itself is unaffected — the errors land in post-job
+          # cleanup, after the crates are already on crates.io — but they
+          # make a green release look red and would mask a real failure.
+          save-if: false
 
       - name: Extract version
         id: version
