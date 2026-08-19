@@ -77,6 +77,7 @@ jobs:
   publish:
     name: Publish dev crates to crates.io
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
@@ -86,6 +87,10 @@ jobs:
 
       - name: Run setup script
         if: inputs.setup-script != ''
+        # A stalled `apt-get` here used to run to the 360-minute job default and
+        # hold a whole nightly tier hostage. Setup is package installs; 10
+        # minutes is generous and a stall now fails fast.
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
 
       - name: Validate dev version form

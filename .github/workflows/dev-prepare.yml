@@ -80,6 +80,7 @@ jobs:
     name: CI (fmt / clippy / build / test)
     if: inputs.run-tests
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       # ubuntu-latest ships with ~14 GiB free; a full workspace clippy +
       # build + test against wasmtime/tokio with --all-features exhausts it
@@ -103,6 +104,10 @@ jobs:
 
       - name: Run setup script
         if: inputs.setup-script != ''
+        # A stalled `apt-get` here used to run to the 360-minute job default and
+        # hold a whole nightly tier hostage. Setup is package installs; 10
+        # minutes is generous and a stall now fails fast.
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
 
       - name: fmt
@@ -134,6 +139,7 @@ jobs:
     needs: [build-test]
     if: always() && (needs.build-test.result == 'success' || needs.build-test.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.stamp.outputs.dev }}
       binary: ${{ steps.stamp.outputs.binary }}

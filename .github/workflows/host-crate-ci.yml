@@ -85,6 +85,7 @@ jobs:
     # against the last v* tag at publish boundary.
     if: ${{ inputs.run-semver-checks }}
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
         with:
@@ -95,6 +96,7 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
       - name: Resolve semver baseline
         id: baseline

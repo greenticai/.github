@@ -117,6 +117,7 @@ jobs:
   main-pre-release-guard:
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -146,6 +147,7 @@ jobs:
 
   toolchain-check:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -181,6 +183,7 @@ jobs:
 
   fmt:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -190,11 +193,13 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
           components: rustfmt
       - if: inputs.setup-script != ''
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
       - run: cargo fmt --all -- --check
 
   clippy:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
         with:
@@ -224,6 +229,7 @@ jobs:
           targets: ${{ inputs.variant == 'wasm' && 'wasm32-wasip2' || '' }}
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
       - name: Resolve clippy args
         id: clippy_args
@@ -243,6 +249,7 @@ jobs:
 
   test:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
         with:
@@ -270,6 +277,7 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
       - name: Resolve test args
         id: test_args
@@ -290,6 +298,7 @@ jobs:
   wasm:
     if: inputs.variant == 'wasm'
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
         with:
@@ -300,6 +309,7 @@ jobs:
           targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
       - if: inputs.setup-script != ''
+        timeout-minutes: 10
         run: ${{ inputs.setup-script }}
       - name: Install cargo-binstall
         if: ${{ inputs.use-cargo-component || inputs.validate-component }}
