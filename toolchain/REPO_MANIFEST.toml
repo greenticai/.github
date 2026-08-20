@@ -778,11 +778,15 @@ tier = 7
 # which reads THIS list. Result: greentic-runner-host 1.1.6 shipped resolving
 # greentic-aw-runtime 1.1.5 (range dep), silently reverting an async-nats security bump.
 publishes = ["runner-core", "aw-event-bridge", "greentic-aw-runtime", "greentic-runner-host", "greentic-runner-desktop", "greentic-runner"]
-# aw-event-bridge and greentic-aw-runtime are excluded from the workspace on
-# develop ("main-only crates: not yet integrated — their transitive deps pin
-# 1.1.x interfaces which conflict with develop's 1.2.x ranges"), so
-# cargo publish -p <them> cannot resolve on the dev lane.
-dev-exclude-publishes = ["aw-event-bridge", "greentic-aw-runtime"]
+# Both were excluded here while they sat outside develop's workspace
+# ("main-only crates: not yet integrated — their transitive deps pin 1.1.x
+# interfaces which conflict with develop's 1.2.x ranges"), so
+# `cargo publish -p <them>` could not resolve on the dev lane. That is no
+# longer true: greentic-runner#TBD re-pins them onto the 1.2 dev line and
+# makes them workspace members, and greentic-runner-host now requires
+# greentic-aw-runtime by version (>=1.2.0-dev) rather than by path alone — so
+# runner-host cannot publish at all unless aw-runtime publishes first.
+dev-exclude-publishes = []
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-runner"]
 dual-role-binary-crates = ["greentic-runner"]
