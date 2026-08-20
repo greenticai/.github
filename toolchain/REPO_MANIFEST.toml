@@ -101,8 +101,9 @@ nightly-codex-enabled = true
 org = "greenticai"
 variant = "wasm"
 tier = 3
-publishes = []  # populate before deploying dev-publish (gtdx CLI + runtime crates)
+publishes = ["greentic-ext-runtime"]
 version-track = { from = "0.2", to = "0.3" }
+dev-publish-enabled = true
 weekly-stable-enabled = false
 nightly-codex-enabled = false
 
