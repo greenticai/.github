@@ -762,7 +762,7 @@ nightly-codex-enabled = false
 org = "greenticai"
 variant = "host"
 tier = 7
-publishes = []  # WASM provider components
+publishes = ["greentic-dw-memory-long-term"]  # contract crate only; the WASM provider components ship as artifacts, not crates
 version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
