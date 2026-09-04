@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: "1.95.0"
+      features:
+        description: "Comma-separated cargo features to enable for the binary build (e.g. 'desktop-agent-ephemeral,greentic-llm-backend'). Additive to the package's default features — the build never passes --no-default-features. Omit for defaults only. Keep in step with the dev lane's dev-release-binaries.yml input of the same name, or a stable binary ships features the dev binary has (or lacks)."
+        required: false
+        type: string
+        default: ""
       extra-files:
         description: "Newline-separated list of repo-root files to include alongside the binary in the archive (e.g. README.md, LICENSE)"
         required: false
@@ -128,11 +133,21 @@ jobs:
 
       - name: Build release binary
         shell: bash
+        env:
+          FEATURES: ${{ inputs.features }}
         run: |
+          # An empty --features "" is a no-op on cargo 1.95, but omitting the
+          # flag is the unambiguous way to say "default features only" and does
+          # not depend on that behaviour holding in a future toolchain.
+          feature_args=()
+          if [ -n "$FEATURES" ]; then
+            feature_args=(--features "$FEATURES")
+          fi
           cargo build --release --locked \
             --target "${{ matrix.target }}" \
             --package "${{ inputs.package }}" \
-            --bin "${{ inputs.binary }}"
+            --bin "${{ inputs.binary }}" \
+            "${feature_args[@]}"
 
       - name: Package archive (tgz)
         if: matrix.os != 'windows' || inputs.windows-archive-format == 'tgz'
