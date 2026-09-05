@@ -64,6 +64,15 @@ tier = 9
 publishes = ["only-on-main"]
 dev-exclude-publishes = ["only-on-main"]
 dev-publish-enabled = true
+
+[repos.featured-binary-repo]
+org = "greenticai"
+variant = "host"
+tier = 2
+publishes = ["gamma"]
+binary-crates = ["gamma"]
+binary-features = "feat-a,feat-b"
+dev-publish-enabled = true
 TOML
 
 export SYNC_DEV_PUBLISH_LIB_ONLY=1
@@ -99,6 +108,49 @@ assert_eq "repo with every crate excluded is skipped entirely" \
 
 assert_eq "unaffected repos still emitted" \
   "1" "$(present plain-repo)"
+
+echo ""
+echo "── binary-features ──"
+
+# Column 12 of parse_manifest output. The wire format is tab-separated and
+# bash `read` collapses consecutive tabs, so an empty optional column must be
+# emitted as the `_NONE_` sentinel or every column after it shifts left — a
+# failure that produces a plausible-looking caller rather than an error.
+binary_features_for() {
+  parse_manifest | awk -F'\t' -v want="$1" '$10 == want { print $12 }'
+}
+
+assert_eq "repo with the field carries it through" \
+  "feat-a,feat-b" "$(binary_features_for featured-binary-repo)"
+
+assert_eq "repo without the field emits the sentinel, not an empty column" \
+  "_NONE_" "$(binary_features_for plain-repo)"
+
+# Every earlier column must still land where its reader expects it.
+assert_eq "adding the column did not shift the repo name" \
+  "1" "$(present featured-binary-repo)"
+
+assert_eq "adding the column did not shift the crate list" \
+  "gamma" "$(crates_for featured-binary-repo)"
+
+# The features only reach the emitted caller through the per-binary job, so a
+# repo with no binary-crates would drop them silently. Refuse instead.
+BAD_MANIFEST="$FIXTURE_DIR/bad.toml"
+cat > "$BAD_MANIFEST" <<'TOML'
+[repos.no-binaries]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["delta"]
+binary-features = "feat-a"
+TOML
+((tests_run++)) || true
+if MANIFEST="$BAD_MANIFEST" parse_manifest >/dev/null 2>&1; then
+  echo "  ✗ binary-features without binary-crates is refused"
+  ((tests_failed++)) || true
+else
+  echo "  ✓ binary-features without binary-crates is refused"
+fi
 
 echo ""
 echo "── Summary ──"

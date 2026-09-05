@@ -790,6 +790,18 @@ dev-exclude-publishes = []
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 binary-crates = ["greentic-runner"]
 dual-role-binary-crates = ["greentic-runner"]
+# Both are non-default features, and the product does not work without them:
+# `greentic-llm-backend` is what routes agentic-worker LLM traffic through the
+# configured provider, and `desktop-agent-ephemeral` is what the designer's DW
+# test-chat sidecar runs on. A binary published with default features only
+# still starts, still answers /healthz, and silently sends every agentic-worker
+# LLM call to api.openai.com regardless of which provider the tenant configured
+# — nothing reports it. Every published greentic-runner / greentic-runner-dev
+# binary was built that way until this key existed, because the binary-build
+# workflows had no features input at all. Note `all-features` is a different
+# knob: it only reaches dev-prepare's clippy/build/test, never the shipped
+# binary, so it could not have covered this.
+binary-features = "desktop-agent-ephemeral,greentic-llm-backend"
 exclude-crates = ["echo-secret", "component-v0-6-dummy"]
 version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
