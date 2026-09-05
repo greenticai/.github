@@ -1,3 +1,7 @@
 # Self-test fixture build artifacts (see selftest/README.md).
 selftest/target/
 selftest/Cargo.lock
+
+# Python bytecode caches — a sync-script run leaves these behind.
+__pycache__/
+*.pyc
