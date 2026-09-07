@@ -102,6 +102,21 @@ jobs:
           targets: ${{ inputs.wasm-target && 'wasm32-wasip2' || '' }}
       - uses: Swatinem/rust-cache@v2
 
+      # `cargo install cargo-binstall --locked` compiles it from source, and
+      # cargo-binstall 1.23.0 (2026-09-05) locks vergen 10.0.3, whose
+      # rust-version is 1.96.0 — above the 1.95.0 every host repo pins. That
+      # killed greentic-cards2pack's dev-publish on 2026-09-07 (run
+      # 34099931608) and halted the nightly at tier 6. The setup scripts guard
+      # on `command -v cargo-binstall`, so a prebuilt binary here means the
+      # compile never runs. Same action pr-ci.yml already uses; gated on the
+      # script actually calling binstall so every other caller pays nothing.
+      - name: Install cargo-binstall (prebuilt)
+        if: contains(inputs.setup-script, 'cargo binstall')
+        uses: taiki-e/install-action@cargo-binstall
+      - name: Ensure cargo bin path is on PATH
+        if: contains(inputs.setup-script, 'cargo binstall')
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Run setup script
         if: inputs.setup-script != ''
         # A stalled `apt-get` here used to run to the 360-minute job default and
