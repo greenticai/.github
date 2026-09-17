@@ -143,6 +143,46 @@ jobs:
           echo "binary=${binary}" >> "$GITHUB_OUTPUT"
           echo "dev_name=${dev_name}" >> "$GITHUB_OUTPUT"
 
+      # The archive, the release tag and every channel manifest that points at
+      # it say `<version>`; the binary must report the same thing. Without this
+      # step the build read the committed Cargo.toml, so every dev binary said
+      # `--version` = `1.2.0-dev.0` (its develop base) while shipped as
+      # `1.2.<run-id>` — and consumers that gate on the REPORTED version (the
+      # designer's greentic-pack floor, gtc's already-installed check) judged
+      # the wrong number. dev-publish.yml's stamp happens in a different job
+      # and never reached these builds.
+      #
+      # Only the built package is stamped; siblings keep their committed
+      # versions. `cargo update --workspace` then rewrites exactly that
+      # member's Cargo.lock entry (cargo's documented way to follow a manifest
+      # version change) so the `--locked` build below still refuses any other
+      # lockfile drift.
+      - name: Stamp the built package to the release version
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          py=""
+          for candidate in python3 python; do
+            if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+              py="$candidate"
+              break
+            fi
+          done
+          if [ -z "$py" ]; then
+            echo "::error::no usable python3/python on this runner to stamp ${PACKAGE}"
+            exit 1
+          fi
+          script="${RUNNER_TEMP}/stamp-binary-version.py"
+          curl -fsSL --retry 5 -o "$script" \
+            https://raw.githubusercontent.com/greenticai/.github/main/scripts/stamp-binary-version.py
+          "$py" "$script" --package "$PACKAGE" --version "$VERSION"
+          if [ -f Cargo.lock ]; then
+            cargo update --workspace
+          fi
+
       - name: Build release binary
         shell: bash
         env:
