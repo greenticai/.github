@@ -53,6 +53,10 @@ on:
         description: "Pass --all-features to clippy/build/test. Set false for repos whose optional features need native libs or private credentials a stock runner does not have (e.g. greentic-sorx's `foundationdb` feature, which needs the FDB client headers at link time). Mirrors what host-crate-ci.yml callers already do via clippy-args/test-args."
         type: boolean
         default: true
+      debuginfo:
+        description: "Optional debuginfo level for dev-prepare's OWN clippy/build/test (sets CARGO_PROFILE_DEV_DEBUG and CARGO_PROFILE_TEST_DEBUG), e.g. `line-tables-only`. Empty (the default) leaves the repo's profiles untouched. For workspaces whose `--all-features` test build outgrows the runner disk — greentic-runner's filled the whole runner and died in `ld` with SIGBUS (\"Free space left: 59 MB\", run 35306216089). Never reaches a shipped binary: dev-release-binaries.yml builds release artifacts in its own job."
+        type: string
+        default: ""
       require-pre-release:
         description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` (or `M.m.p-research.N`) pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
         type: boolean
@@ -124,6 +128,27 @@ jobs:
         # minutes is generous and a stall now fails fast.
         timeout-minutes: 10
         run: ${{ inputs.setup-script }}
+
+      # Opt-in (inputs.debuginfo): a workspace whose `--all-features` test build
+      # exceeds the runner disk links nothing at all — ld dies with SIGBUS once
+      # the disk is full. Reducing debuginfo here only shrinks this job's
+      # target dir; release binaries are built by dev-release-binaries.yml.
+      - name: Limit debuginfo for this job's builds
+        if: inputs.debuginfo != ''
+        env:
+          DEBUGINFO: ${{ inputs.debuginfo }}
+        run: |
+          set -euo pipefail
+          case "${DEBUGINFO}" in
+            0|1|2|true|false|none|limited|full|line-tables-only|line-directives-only) ;;
+            *)
+              echo "::error::debuginfo '${DEBUGINFO}' is not a cargo debug level"
+              exit 1
+              ;;
+          esac
+          echo "CARGO_PROFILE_DEV_DEBUG=${DEBUGINFO}" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_TEST_DEBUG=${DEBUGINFO}" >> "$GITHUB_ENV"
+          echo "debuginfo for dev/test profiles in this job: ${DEBUGINFO}"
 
       - name: fmt
         run: cargo fmt --all -- --check

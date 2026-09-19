@@ -802,6 +802,13 @@ dual-role-binary-crates = ["greentic-runner"]
 # knob: it only reaches dev-prepare's clippy/build/test, never the shipped
 # binary, so it could not have covered this.
 binary-features = "desktop-agent-ephemeral,greentic-llm-backend"
+# dev-prepare builds and tests the WHOLE workspace with --all-features (surrealdb
+# + rocksdb, wasmtime, the dw providers) at full debuginfo, and that target dir
+# outgrew the runner: run 35306216089 reached "Free space left: 59 MB" and ld died
+# with SIGBUS linking the test binaries, so develop's Dev Publish has shipped no
+# binary since. Line tables keep file:line in every panic and backtrace. This
+# reaches dev-prepare's own clippy/build/test only, never the shipped binary.
+ci-debuginfo = "line-tables-only"
 exclude-crates = ["echo-secret", "component-v0-6-dummy"]
 version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true

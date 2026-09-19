@@ -132,6 +132,10 @@ log_drift(){ echo -e "  ${YELLOW}⚠${RESET} $1"; }
 #                                                             # whose optional features need native libs or private credentials a
 #                                                             # stock runner lacks (greentic-sorx's `foundationdb` needs the FDB
 #                                                             # client headers at link time). Defaults to true.
+#   ci-debuginfo             = "line-tables-only"             # dev-prepare's `debuginfo` input: debuginfo level for its OWN
+#                                                             # clippy/build/test only (never a shipped binary). For workspaces
+#                                                             # whose --all-features test build outgrows the runner disk
+#                                                             # (greentic-runner). Unset leaves the repo's profiles alone.
 #
 # NOTE: Empty optional fields are emitted as the sentinel `_NONE_`. bash `read`
 # with tab IFS collapses consecutive tab delimiters because tab is whitespace;
@@ -179,10 +183,13 @@ for name, entry in m.get('repos', {}).items():
         sys.exit(f'ERROR: binary-features for {name} has no effect without binary-crates')
     if '\t' in binary_features or ' ' in binary_features:
         sys.exit(f'ERROR: binary-features for {name} must be a comma-separated list with no spaces or tabs')
-    entries.append((tier, entry['org'], entry['variant'], crates, exclude, setup, binary, dual, binary_bins, name, all_features, binary_features))
+    ci_debuginfo = entry.get('ci-debuginfo', '') or '_NONE_'
+    if ci_debuginfo != '_NONE_' and ci_debuginfo not in ('0', '1', '2', 'none', 'limited', 'full', 'line-tables-only', 'line-directives-only'):
+        sys.exit(f'ERROR: ci-debuginfo for {name} is not a cargo debug level: {ci_debuginfo!r}')
+    entries.append((tier, entry['org'], entry['variant'], crates, exclude, setup, binary, dual, binary_bins, name, all_features, binary_features, ci_debuginfo))
 entries.sort()
-for tier, org, variant, crates, exclude, setup, binary, dual, binary_bins, name, all_features, binary_features in entries:
-    print(f'{org}\t{variant}\t{tier}\t{crates}\t{exclude}\t{setup}\t{binary}\t{dual}\t{binary_bins}\t{name}\t{all_features}\t{binary_features}')
+for tier, org, variant, crates, exclude, setup, binary, dual, binary_bins, name, all_features, binary_features, ci_debuginfo in entries:
+    print(f'{org}\t{variant}\t{tier}\t{crates}\t{exclude}\t{setup}\t{binary}\t{dual}\t{binary_bins}\t{name}\t{all_features}\t{binary_features}\t{ci_debuginfo}')
 "
 }
 
@@ -202,6 +209,7 @@ generate_caller() {
   local binary_bins="${7:-}"
   local all_features="${8:-true}"
   local binary_features="${9:-}"
+  local ci_debuginfo="${10:-}"
 
   # Look up the [[bin]].name override for a given package, from the
   # `binary-bins` manifest field encoded as `pkg=bin,pkg2=bin2`. Echoes
@@ -261,12 +269,16 @@ EOF
   # doesn't complain about an empty `with:` block (it's valid YAML but noisy).
   # `require-pre-release` is the only binary-related input on dev-prepare,
   # and it's gated on dual-role (not binary-only) — so use the same gate here.
-  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$dual_role_binary_crates" || "$all_features" == "false" ]]; then
+  if [[ -n "$exclude_crates" || -n "$setup_script" || "$variant" == "wasm" || -n "$dual_role_binary_crates" || "$all_features" == "false" || -n "$ci_debuginfo" ]]; then
     echo "    with:"
   fi
 
   if [[ "$all_features" == "false" ]]; then
     echo "      all-features: false"
+  fi
+
+  if [[ -n "$ci_debuginfo" ]]; then
+    echo "      debuginfo: \"$ci_debuginfo\""
   fi
 
   if [[ -n "$exclude_crates" ]]; then
@@ -388,6 +400,7 @@ sync_repo() {
   local repo_name="${10}"
   local all_features="${11:-true}"
   local binary_features="${12:-}"
+  local ci_debuginfo="${13:-}"
   local local_dir="${ORG_DIRS[$org]}"
   local repo_path="$local_dir/$repo_name"
   local workflow_path=".github/workflows/dev-publish.yml"
@@ -416,7 +429,7 @@ sync_repo() {
 
   # Generate expected caller content
   local expected
-  expected=$(generate_caller "$crates" "$variant" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$all_features" "$binary_features")
+  expected=$(generate_caller "$crates" "$variant" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$all_features" "$binary_features" "$ci_debuginfo")
 
   # Get current caller content from develop (if it exists)
   local current
@@ -577,7 +590,7 @@ fi
 current_tier=""
 
 # Parse manifest and process repos (sorted by tier)
-while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script binary_crates dual_role_binary_crates binary_bins repo_name all_features binary_features; do
+while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script binary_crates dual_role_binary_crates binary_bins repo_name all_features binary_features ci_debuginfo; do
   # Strip sentinel back to empty string (see parse_manifest note).
   [[ "$exclude_crates"          == "_NONE_" ]] && exclude_crates=""
   [[ "$setup_script"            == "_NONE_" ]] && setup_script=""
@@ -585,6 +598,7 @@ while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script bina
   [[ "$dual_role_binary_crates" == "_NONE_" ]] && dual_role_binary_crates=""
   [[ "$binary_bins"             == "_NONE_" ]] && binary_bins=""
   [[ "$binary_features"         == "_NONE_" ]] && binary_features=""
+  [[ "$ci_debuginfo"            == "_NONE_" ]] && ci_debuginfo=""
 
   # Filter to single repo if specified
   if [[ -n "$SINGLE_REPO" && "$repo_name" != "$SINGLE_REPO" ]]; then
@@ -603,7 +617,7 @@ while IFS=$'\t' read -r org variant tier crates exclude_crates setup_script bina
   fi
 
   echo -e "${CYAN}${BOLD}[$org/$repo_name]${RESET} (tier $tier, $variant)"
-  sync_repo "$org" "$variant" "$tier" "$crates" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$repo_name" "$all_features" "$binary_features"
+  sync_repo "$org" "$variant" "$tier" "$crates" "$exclude_crates" "$setup_script" "$binary_crates" "$dual_role_binary_crates" "$binary_bins" "$repo_name" "$all_features" "$binary_features" "$ci_debuginfo"
 done < <(parse_manifest)
 
 # ── Summary ───────────────────────────────────────────────────────
