@@ -132,6 +132,14 @@ def test_single_package_literal_version() -> None:
         assert _versions(root)["demo"] == VERSION
 
 
+def test_research_line_version_is_stamped_verbatim() -> None:
+    """A research-line base (greentic-start#595) is replaced like any other."""
+    text = '[package]\nname = "demo"\nversion = "1.3.0-research.3"\n'
+    out = stamp.stamp_manifest_text(text, "1.3.0-research.35341963100")
+    assert out == '[package]\nname = "demo"\nversion = "1.3.0-research.35341963100"\n', out
+    assert stamp._SEMVER_RE.match("1.3.0-research.35341963100")
+
+
 def test_missing_version_key_is_inserted() -> None:
     text = '[package]\nname = "demo"\nedition = "2021"\n'
     out = stamp.stamp_manifest_text(text, VERSION)

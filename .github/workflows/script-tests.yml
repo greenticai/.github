@@ -13,6 +13,9 @@ on:
       - 'scripts/**'
       - '.github/actions/**'
       - '.github/workflows/script-tests.yml'
+      # test_dev_lane_version_forms.py executes steps extracted from these two.
+      - '.github/workflows/dev-prepare.yml'
+      - '.github/workflows/dev-publish.yml'
   workflow_dispatch:
 
 permissions:

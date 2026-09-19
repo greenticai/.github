@@ -12,6 +12,7 @@ Covers the cases that motivate the script (see the script's module docstring):
     find/sed pass) is a no-op.
   * Workspace-inherited version (`version.workspace = true`) is a no-op.
   * Pre-release base (`M.m.p-dev.N`) → stamped to `M.m.p-dev.{RUN_ID}`.
+  * Research base (`M.m.p-research.N`) → stamped to `M.m.p-research.{RUN_ID}`.
   * Regular base (`M.m.p`) → stamped to `M.m.{RUN_ID}`.
   * Missing crate → script exits 1.
   * Unsupported version form → script exits 1.
@@ -194,6 +195,34 @@ def test_pre_release_base_preserves_form() -> None:
         assert _read_version(inner) == f"0.3.0-dev.{RUN_ID}"
 
 
+def test_research_base_preserves_form() -> None:
+    """Inner crate at M.m.p-research.N gets re-stamped to M.m.p-research.{RUN_ID}.
+
+    The research version line (greentic-start#595): greentic-deployer at
+    `1.3.0-research.1` carries greentic-deploy-spec at `1.3.0-research.3`.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        top, inner = _deployer_layout(
+            root,
+            top_version=f"1.3.0-research.{RUN_ID}",
+            inner_version="1.3.0-research.3",
+        )
+        result = _run(root, "greentic-deploy-spec", dev_version=f"1.3.0-research.{RUN_ID}")
+        assert result.returncode == 0, result.stderr
+        assert _read_version(inner) == f"1.3.0-research.{RUN_ID}"
+
+
+def test_other_pre_release_tags_still_rejected() -> None:
+    """Only `-dev.N` and `-research.N` are stamped; `-rc.N` is still an error."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _deployer_layout(root, top_version=DEV_VERSION, inner_version="1.3.0-rc.1")
+        result = _run(root, "greentic-deploy-spec")
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "not on supported form" in result.stderr
+
+
 def test_regular_base_uses_mm_run_id() -> None:
     """Inner crate at M.m.p gets stamped to M.m.{RUN_ID} (regular release)."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -309,6 +338,8 @@ def main() -> None:
         test_inner_crate_already_at_dev_version_is_noop,
         test_workspace_inheritance_is_noop,
         test_pre_release_base_preserves_form,
+        test_research_base_preserves_form,
+        test_other_pre_release_tags_still_rejected,
         test_regular_base_uses_mm_run_id,
         test_missing_crate_errors,
         test_unsupported_version_form_errors,

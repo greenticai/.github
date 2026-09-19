@@ -54,7 +54,7 @@ on:
         type: boolean
         default: true
       require-pre-release:
-        description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
+        description: "If true, require Cargo.toml base to be on `M.m.p-dev.N` (or `M.m.p-research.N`) pre-release form. Set by binary-bifurcated repos so dev publishes don't pollute the stable `<name>` namespace on crates.io. See plans/binary-bifurcation.md (2026-04-27 update)."
         type: boolean
         default: false
     outputs:
@@ -190,8 +190,19 @@ jobs:
           #    ${BASE%.*} strips `.p` leaving `M.m`, then append RUN_ID. WARNING:
           #    on dual-role repos this pollutes the stable `<name>` namespace —
           #    set `require-pre-release: true` on the caller to forbid this.
+          #
+          # 3. Research pre-release `M.m.p-research.{RUN_ID}`. Cargo.toml base is
+          #    `M.m.p-research.N` — the research version line repos moved onto
+          #    while consolidating on `develop` (greentic-start#595). Same
+          #    arithmetic as form 1: ${BASE%.*} strips `.N` leaving
+          #    `M.m.p-research`, then append RUN_ID. It is a pre-release, so it
+          #    satisfies require-pre-release, and the stamped RUN_ID sorts above
+          #    any hand-set `-research.N` (numeric identifier comparison).
           if [[ "${BASE}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+-dev\.[0-9]+$ ]]; then
             kind="pre-release"
+            major_minor="${BASH_REMATCH[1]}"
+          elif [[ "${BASE}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+-research\.[0-9]+$ ]]; then
+            kind="research-pre-release"
             major_minor="${BASH_REMATCH[1]}"
           elif [[ "${BASE}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
             kind="regular"
@@ -203,7 +214,7 @@ jobs:
               exit 1
             fi
           else
-            echo "::error::Cargo.toml base '${BASE}' does not match supported forms 'M.m.p' or 'M.m.p-dev.N'."
+            echo "::error::Cargo.toml base '${BASE}' does not match supported forms 'M.m.p', 'M.m.p-dev.N' or 'M.m.p-research.N'."
             exit 1
           fi
           # `dev` is the LIBRARY version (alias `lib-version`). For pre-release
