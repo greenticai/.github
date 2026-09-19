@@ -192,6 +192,19 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-version }}
           components: rustfmt
+      # A setup script that compiles cargo-binstall (`cargo install
+      # cargo-binstall --locked`) has failed since cargo-binstall 1.22/1.23 lock
+      # vergen 10.0.x, whose rust-version is 1.96 — above the 1.95 every host
+      # repo pins. greentic-pack's fmt/clippy/test have been red on every PR
+      # since. Same prebuilt install dev-prepare.yml uses (#261); scripts guard
+      # on the binary already existing, so the compile never runs. Gated on the
+      # script actually calling binstall so every other caller pays nothing.
+      - name: Install cargo-binstall (prebuilt)
+        if: contains(inputs.setup-script, 'cargo binstall')
+        uses: taiki-e/install-action@cargo-binstall
+      - name: Ensure cargo bin path is on PATH
+        if: contains(inputs.setup-script, 'cargo binstall')
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - if: inputs.setup-script != ''
         timeout-minutes: 10
         run: ${{ inputs.setup-script }}
@@ -228,6 +241,19 @@ jobs:
           components: clippy
           targets: ${{ inputs.variant == 'wasm' && 'wasm32-wasip2' || '' }}
       - uses: Swatinem/rust-cache@v2
+      # A setup script that compiles cargo-binstall (`cargo install
+      # cargo-binstall --locked`) has failed since cargo-binstall 1.22/1.23 lock
+      # vergen 10.0.x, whose rust-version is 1.96 — above the 1.95 every host
+      # repo pins. greentic-pack's fmt/clippy/test have been red on every PR
+      # since. Same prebuilt install dev-prepare.yml uses (#261); scripts guard
+      # on the binary already existing, so the compile never runs. Gated on the
+      # script actually calling binstall so every other caller pays nothing.
+      - name: Install cargo-binstall (prebuilt)
+        if: contains(inputs.setup-script, 'cargo binstall')
+        uses: taiki-e/install-action@cargo-binstall
+      - name: Ensure cargo bin path is on PATH
+        if: contains(inputs.setup-script, 'cargo binstall')
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - if: inputs.setup-script != ''
         timeout-minutes: 10
         run: ${{ inputs.setup-script }}
@@ -276,6 +302,19 @@ jobs:
         with:
           toolchain: ${{ inputs.rust-version }}
       - uses: Swatinem/rust-cache@v2
+      # A setup script that compiles cargo-binstall (`cargo install
+      # cargo-binstall --locked`) has failed since cargo-binstall 1.22/1.23 lock
+      # vergen 10.0.x, whose rust-version is 1.96 — above the 1.95 every host
+      # repo pins. greentic-pack's fmt/clippy/test have been red on every PR
+      # since. Same prebuilt install dev-prepare.yml uses (#261); scripts guard
+      # on the binary already existing, so the compile never runs. Gated on the
+      # script actually calling binstall so every other caller pays nothing.
+      - name: Install cargo-binstall (prebuilt)
+        if: contains(inputs.setup-script, 'cargo binstall')
+        uses: taiki-e/install-action@cargo-binstall
+      - name: Ensure cargo bin path is on PATH
+        if: contains(inputs.setup-script, 'cargo binstall')
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - if: inputs.setup-script != ''
         timeout-minutes: 10
         run: ${{ inputs.setup-script }}
