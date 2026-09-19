@@ -25,6 +25,7 @@ This script bridges that gap. For each crate name in `--crates`:
   * Otherwise rebuild a stamped version using the same rules as
     dev-prepare's compute-version step:
       - `M.m.p-dev.N`  →  `M.m.p-dev.{RUN_ID}`   (preserves pre-release)
+      - `M.m.p-research.N`  →  `M.m.p-research.{RUN_ID}`   (research line)
       - `M.m.p`        →  `M.m.{RUN_ID}`         (regular release)
     Anything else is an error.
   * Rewrite the version line in place with format-preserving tomlkit.
@@ -50,7 +51,7 @@ from pathlib import Path
 import tomlkit
 
 # Same forms accepted by dev-prepare's compute-version step.
-_PRE_RELEASE_RE = re.compile(r"^(?P<mmp>\d+\.\d+\.\d+)-dev\.\d+$")
+_PRE_RELEASE_RE = re.compile(r"^(?P<mmp>\d+\.\d+\.\d+)-(?P<tag>dev|research)\.\d+$")
 _REGULAR_RE = re.compile(r"^(?P<mm>\d+\.\d+)\.\d+$")
 
 # Walk excludes — mirror the rest of the .github tooling.
@@ -99,12 +100,13 @@ def _stamp_version(current: str, run_id: str) -> str:
     """
     m = _PRE_RELEASE_RE.match(current)
     if m is not None:
-        return f"{m.group('mmp')}-dev.{run_id}"
+        return f"{m.group('mmp')}-{m.group('tag')}.{run_id}"
     m = _REGULAR_RE.match(current)
     if m is not None:
         return f"{m.group('mm')}.{run_id}"
     raise ValueError(
-        f"version {current!r} is not on supported form 'M.m.p' or 'M.m.p-dev.N'"
+        f"version {current!r} is not on supported form 'M.m.p', 'M.m.p-dev.N' "
+        f"or 'M.m.p-research.N'"
     )
 
 
