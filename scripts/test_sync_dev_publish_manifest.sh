@@ -72,6 +72,7 @@ tier = 2
 publishes = ["gamma"]
 binary-crates = ["gamma"]
 binary-features = "feat-a,feat-b"
+ci-debuginfo = "line-tables-only"
 dev-publish-enabled = true
 TOML
 
@@ -150,6 +151,47 @@ if MANIFEST="$BAD_MANIFEST" parse_manifest >/dev/null 2>&1; then
   ((tests_failed++)) || true
 else
   echo "  ✓ binary-features without binary-crates is refused"
+fi
+
+echo ""
+echo "── ci-debuginfo ──"
+
+# Column 13 of parse_manifest output; same sentinel rule as binary-features.
+ci_debuginfo_for() {
+  parse_manifest | awk -F'\t' -v want="$1" '$10 == want { print $13 }'
+}
+
+assert_eq "repo with the field carries it through" \
+  "line-tables-only" "$(ci_debuginfo_for featured-binary-repo)"
+
+assert_eq "repo without the field emits the sentinel" \
+  "_NONE_" "$(ci_debuginfo_for plain-repo)"
+
+assert_eq "adding the column did not shift binary-features" \
+  "feat-a,feat-b" "$(binary_features_for featured-binary-repo)"
+
+assert_eq "generated caller passes it to dev-prepare" \
+  '      debuginfo: "line-tables-only"' \
+  "$(generate_caller gamma host "" "" gamma "" "" true feat-a,feat-b line-tables-only | grep -F 'debuginfo:')"
+
+assert_eq "generated caller omits it when unset" \
+  "" "$(generate_caller alpha host "" "" "" "" "" true "" "" | grep -F 'debuginfo:')"
+
+BAD_DEBUG="$FIXTURE_DIR/bad-debug.toml"
+cat > "$BAD_DEBUG" <<'TOML'
+[repos.bad-debug]
+org = "greenticai"
+variant = "host"
+tier = 1
+publishes = ["eps"]
+ci-debuginfo = "tiny"
+TOML
+((tests_run++)) || true
+if MANIFEST="$BAD_DEBUG" parse_manifest >/dev/null 2>&1; then
+  echo "  ✗ an unknown ci-debuginfo level is refused"
+  ((tests_failed++)) || true
+else
+  echo "  ✓ an unknown ci-debuginfo level is refused"
 fi
 
 echo ""
