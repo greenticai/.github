@@ -117,6 +117,18 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = true
 
+[repos.greentic-designer-sdk]
+org = "greenticai"
+variant = "host"
+tier = 0
+# Libraries only on the dev lane. The gtdx CLI (greentic-extension-sdk-cli)
+# keeps shipping from release.yml on a v* tag; its embedded-wit/<version>
+# directory is tied to CARGO_PKG_VERSION, which dev stamping changes.
+publishes = ["greentic-extension-sdk-contract", "greentic-extension-sdk-state", "greentic-extension-sdk-testing", "greentic-extension-sdk-registry"]
+dev-publish-enabled = true
+weekly-stable-enabled = false
+nightly-codex-enabled = false
+
 [repos.greentic-llm]
 org = "greenticai"
 variant = "host"
