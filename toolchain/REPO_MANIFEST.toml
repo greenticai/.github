@@ -234,7 +234,11 @@ nightly-codex-enabled = false
 org = "greenticai"
 variant = "host"
 tier = 1
-publishes = ["greentic-dw-context", "greentic-dw-delegation", "greentic-dw-planning", "greentic-dw-reflection", "greentic-dw-types", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-workspace", "greentic-dw-runtime", "greentic-dw-cli"]
+# Dependency order. greentic-dw-cli is out of the greentic-dw workspace until
+# greentic-dw-authoring publishes on the 1.2.0-dev lane (its git dep pulls
+# research-lane crates); it rejoins this list then. The six *-llm / operala
+# crates and workspace-mem are what greentic-designer needs from this repo.
+publishes = ["greentic-dw-types", "greentic-dw-planning", "greentic-dw-context", "greentic-dw-delegation", "greentic-dw-reflection", "greentic-dw-workspace", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-runtime", "greentic-dw-workspace-mem", "greentic-dw-context-llm", "greentic-dw-planning-llm", "greentic-dw-reflection-llm", "greentic-dw-delegation-llm", "greentic-dw-operala-bridge", "greentic-dw-operala-invoker"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
 version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
