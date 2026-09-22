@@ -236,7 +236,9 @@ variant = "host"
 tier = 1
 # Dependency order. greentic-dw-cli is out of the greentic-dw workspace until
 # greentic-dw-authoring publishes on the 1.2.0-dev lane (its git dep pulls
-# research-lane crates); it rejoins this list then. The six *-llm / operala
+# research-lane crates); it rejoins this list then. That move is in flight:
+# greentic-dw-authoring#57 puts the crate on the lane and this file now
+# carries its [repos.greentic-dw-authoring] entry. The six *-llm / operala
 # crates and workspace-mem are what greentic-designer needs from this repo.
 publishes = ["greentic-dw-types", "greentic-dw-planning", "greentic-dw-context", "greentic-dw-delegation", "greentic-dw-reflection", "greentic-dw-workspace", "greentic-dw-manifest", "greentic-dw-core", "greentic-dw-engine", "greentic-dw-pack", "greentic-dw-runtime", "greentic-dw-workspace-mem", "greentic-dw-context-llm", "greentic-dw-planning-llm", "greentic-dw-reflection-llm", "greentic-dw-delegation-llm", "greentic-dw-operala-bridge", "greentic-dw-operala-invoker"]
 crates-publish-mode = "embedded"  # crates publish is embedded in release-binaries.yml (gated on github_release)
@@ -783,6 +785,24 @@ setup-script = "if ! command -v cargo-binstall >/dev/null 2>&1; then cargo insta
 version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
+nightly-codex-enabled = false
+
+[repos.greentic-dw-authoring]
+org = "greenticai"
+variant = "host"
+# Above greentic-runner (7): this crate depends on greentic-aw-runtime, and on
+# greentic-pack-lib (greentic-pack, tier 6). greentic-designer consumes it and
+# is cached at 8 — rerun dep-graph/build_graph.py once this repo's Cargo.toml
+# is on the lane and propagate whatever the graph says for both.
+tier = 8
+# Library only, and it has NEVER been published: crates.io has no
+# greentic-dw-authoring at all. greentic-designer reached it by git rev until
+# the 1.2.0-dev lane wave, which is what this entry ends. It is the last hop
+# before the designer, so it cannot publish until greentic-runner (#787/#788)
+# and greentic-pack-lib are on the lane.
+publishes = ["greentic-dw-authoring"]
+dev-publish-enabled = true
+weekly-stable-enabled = false
 nightly-codex-enabled = false
 
 [repos.greentic-dw-providers]
