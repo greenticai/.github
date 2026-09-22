@@ -419,6 +419,17 @@ dev-publish-enabled = true
 weekly-stable-enabled = true
 nightly-codex-enabled = false
 
+[repos.greentic-mcp-client]
+org = "greenticai"
+variant = "host"
+tier = 0
+# Library only. Consumed by greentic-aw-runtime (greentic-runner); had no dev
+# lane at all, so develop pushes never published.
+publishes = ["greentic-mcp-client"]
+dev-publish-enabled = true
+weekly-stable-enabled = false
+nightly-codex-enabled = false
+
 [repos.greentic-mcp]
 org = "greenticai"
 variant = "host"
