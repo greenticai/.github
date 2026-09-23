@@ -1697,3 +1697,48 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_inline_path_and_version_dep_loses_its_path_in_the_copy() -> None:
+    """An inline `{ path, version }` sibling must publish through the registry.
+
+    Regression from greenticai/greentic-runner run 35804394619: that crate
+    declares its host/desktop edges inline rather than inheriting, so
+    `default-features = false` stays scoped to that one edge. The staged copy
+    under target/bifurcate/ cannot see `../greentic-runner-host`, so a surviving
+    `path` made cargo fail with `failed to load manifest for dependency` before
+    publishing anything. The workspace-inherited branch already stripped `path`;
+    the inline one did not.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            '[workspace]\nmembers = ["crates/bin", "crates/sib"]\n\n'
+            '[workspace.package]\nversion = "1.2.0-dev.0"\n',
+        )
+        _write(
+            root,
+            "crates/sib/Cargo.toml",
+            '[package]\nname = "sib"\nversion.workspace = true\n',
+        )
+        _write(root, "crates/sib/src/lib.rs", "")
+        _write(
+            root,
+            "crates/bin/Cargo.toml",
+            '[package]\nname = "thebin"\nversion.workspace = true\n\n'
+            "[dependencies]\n"
+            'sib = { path = "../sib", version = ">=1.2.0-dev, <1.3.0-0", '
+            "default-features = false }\n",
+        )
+        _write(root, "crates/bin/src/main.rs", "fn main() {}\n")
+
+        _run(root, "thebin", "--dual-role")
+
+        copy = _load(root / "target" / "bifurcate" / "thebin-dev" / "Cargo.toml")
+        dep = copy["dependencies"]["sib"]
+        assert "path" not in dep, dep
+        assert dep["version"] == ">=1.2.0-dev, <1.3.0-0"
+        # The local override that motivated writing this edge inline survives.
+        assert dep["default-features"] is False

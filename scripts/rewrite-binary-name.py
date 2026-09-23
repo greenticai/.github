@@ -695,6 +695,22 @@ def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> 
                     )
                 assert isinstance(spec, dict)
                 deps[dep_name] = _merge_inline_with_workspace(spec, ws_deps[dep_name])
+            elif isinstance(spec, dict) and "path" in spec and "version" in spec:
+                # A sibling declared INLINE rather than inherited, e.g.
+                # `foo = { path = "../foo", version = ">=1.2.0-dev, <1.3.0-0" }`.
+                # A member writes it that way to scope `default-features` to one
+                # edge (greentic-runner does, for its host/desktop edges). The
+                # copy lives at target/bifurcate/<crate>-dev/, where `../foo`
+                # does not exist, so leaving `path` makes cargo fail to even
+                # LOAD the manifest -- `failed to load manifest for dependency`
+                # -- before any publish is attempted. Strip it for the same
+                # reason the workspace-inherited branch above does: the registry
+                # `version` is what a standalone publish must resolve through,
+                # which is also what cargo itself does to a path+version dep at
+                # publish time. Seen on greenticai/greentic-runner run
+                # 35804394619, where its two inline edges had been rewritten
+                # from `{ workspace = true }` by an earlier lane move.
+                spec.pop("path", None)
 
     # [lints] table inheritance: `lints.workspace = true` pulls the entire
     # [workspace.lints.*] tree into the member. The bifurcated copy writes
