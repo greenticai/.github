@@ -712,6 +712,22 @@ def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> 
                 # from `{ workspace = true }` by an earlier lane move.
                 spec.pop("path", None)
 
+    # A path-ONLY dev-dependency (`foo = { path = "crates/foo" }`, no version)
+    # is dropped, which is exactly what `cargo publish` does to it: a published
+    # crate carries no path dev-dependencies. Leaving it breaks the copy
+    # whenever the same crate is also a normal dependency, because the branch
+    # above turned THAT edge into a registry dependency and cargo refuses one
+    # crate from two sources -- `Dependency 'foo' has different source paths
+    # depending on the build target` -- before anything is published. Seen on
+    # greenticai/greentic-deployer run 35939475494 (greentic-deploy-spec is a
+    # path+version dependency and a path-only dev-dependency there), the first
+    # run after the branch above landed. Publishing builds neither tests nor
+    # benches, so nothing in the copy needs the dropped edge.
+    dev_deps = data.get("dev-dependencies", {})
+    for dep_name, spec in list(dev_deps.items()):
+        if isinstance(spec, dict) and "path" in spec and "version" not in spec:
+            del dev_deps[dep_name]
+
     # [lints] table inheritance: `lints.workspace = true` pulls the entire
     # [workspace.lints.*] tree into the member. The bifurcated copy writes
     # an empty [workspace] block (see below), so a member-level

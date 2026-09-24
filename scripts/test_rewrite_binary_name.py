@@ -1742,3 +1742,49 @@ def test_inline_path_and_version_dep_loses_its_path_in_the_copy() -> None:
         assert dep["version"] == ">=1.2.0-dev, <1.3.0-0"
         # The local override that motivated writing this edge inline survives.
         assert dep["default-features"] is False
+
+
+def test_path_only_dev_dep_is_dropped_when_the_normal_edge_goes_to_the_registry() -> None:
+    """One crate as a path+version dependency AND a path-only dev-dependency.
+
+    Regression from greenticai/greentic-deployer run 35939475494: the inline
+    branch above strips `path` from the normal edge, the dev edge kept its
+    `path`, and cargo refused the copy outright -- `Dependency
+    'greentic-deploy-spec' has different source paths depending on the build
+    target`. `cargo publish` drops a path-only dev-dependency anyway, so the
+    copy drops it too.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            '[workspace]\nmembers = ["crates/bin", "crates/sib"]\n\n'
+            '[workspace.package]\nversion = "1.2.0-dev.0"\n',
+        )
+        _write(
+            root,
+            "crates/sib/Cargo.toml",
+            '[package]\nname = "sib"\nversion.workspace = true\n',
+        )
+        _write(root, "crates/sib/src/lib.rs", "")
+        _write(
+            root,
+            "crates/bin/Cargo.toml",
+            '[package]\nname = "thebin"\nversion.workspace = true\n\n'
+            "[dependencies]\n"
+            'sib = { path = "../sib", version = ">=1.2.0-dev, <1.3.0-0" }\n\n'
+            "[dev-dependencies]\n"
+            'sib = { path = "../sib" }\n'
+            'tempfile = "3"\n',
+        )
+        _write(root, "crates/bin/src/main.rs", "fn main() {}\n")
+
+        _run(root, "thebin", "--dual-role")
+
+        copy = _load(root / "target" / "bifurcate" / "thebin-dev" / "Cargo.toml")
+        assert "path" not in copy["dependencies"]["sib"], copy["dependencies"]
+        dev = copy.get("dev-dependencies", {})
+        assert "sib" not in dev, dev
+        # A registry dev-dependency is untouched.
+        assert dev["tempfile"] == "3", dev
