@@ -60,6 +60,16 @@ on:
       GHCR_TOKEN:
         description: "Optional PAT for GHCR push; falls back to GITHUB_TOKEN"
         required: false
+      GREENTIC_RELEASE_PUBLISHER_KEY:
+        description: >-
+          Optional `gts_` key (scope `release_publisher`) used to push this
+          release into greentic-admin's release catalogue as an accelerator
+          — the admin also registers it independently from the GitHub
+          release itself. Omit (or have the caller not pass it) to skip;
+          nothing else in this workflow depends on it. A caller must pass
+          `secrets: inherit`, or this secret explicitly, on the job that
+          calls this reusable workflow, or the registration step no-ops.
+        required: false
 
 permissions:
   contents: write
@@ -227,8 +237,24 @@ jobs:
     name: Attach binaries to GitHub Release
     runs-on: ubuntu-latest
     needs: build-binaries
+    env:
+      # Mapped to env because a reusable workflow's step `if:` cannot read
+      # the `secrets` context directly — this is the documented workaround.
+      GREENTIC_RELEASE_PUBLISHER_KEY: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      # Mirrors the `Derive version from tag` step in build-binaries — that
+      # job's output is matrix-scoped and not visible here, and this job
+      # needs the bare version (without the `v` prefix) to match the
+      # archive filenames when registering the release below.
+      - name: Derive version from tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -249,6 +275,24 @@ jobs:
           title: ${{ github.ref_name }}
           generate-notes: ${{ inputs.generate-release-notes }}
           github-token: ${{ github.token }}
+
+      # Optional accelerator: push this release into greentic-admin's
+      # release catalogue. Never the source of truth (the admin's own
+      # GitHub-release scanner registers the same release independently)
+      # and never fails the workflow — register.py always exits 0. Skipped
+      # entirely, at the workflow level, when the org secret is not
+      # configured (or not forwarded by this caller), so an unconfigured
+      # deployment sees no behavior change at all.
+      - name: Register release with the Greentic release catalogue
+        if: env.GREENTIC_RELEASE_PUBLISHER_KEY != ''
+        uses: greenticai/.github/.github/actions/register-greentic-release@main
+        with:
+          admin-url: ${{ vars.GREENTIC_ADMIN_URL }}
+          repo: ${{ github.repository }}
+          name: ${{ inputs.binary }}
+          version: ${{ steps.version.outputs.version }}
+          dist-dir: .dist-staging
+          key: ${{ env.GREENTIC_RELEASE_PUBLISHER_KEY }}
 
   ghcr-publish:
     name: Push archives to GHCR
