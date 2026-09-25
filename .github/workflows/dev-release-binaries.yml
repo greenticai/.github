@@ -69,6 +69,17 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      GREENTIC_RELEASE_PUBLISHER_KEY:
+        description: >-
+          Optional `gts_` key (scope `release_publisher`) used to push this
+          release into greentic-admin's release catalogue as an accelerator
+          — the admin also registers it independently from the GitHub
+          release itself. Omit (or have the caller not pass it) to skip;
+          nothing else in this workflow depends on it. A caller must pass
+          `secrets: inherit`, or this secret explicitly, on the job that
+          calls this reusable workflow, or the registration step no-ops.
+        required: false
 
 permissions:
   contents: write
@@ -330,3 +341,25 @@ jobs:
           prerelease: "true"
           latest: "false"
           github-token: ${{ github.token }}
+
+      # Optional accelerator: push this release into greentic-admin's
+      # release catalogue. Never the source of truth (the admin's own
+      # GitHub-release scanner registers the same release independently).
+      # No outer `if:` here — the composite action's own
+      # `if: inputs.admin-url != '' && inputs.key != ''` gate is what makes
+      # this a no-op when the org secret/var are unconfigured, so the
+      # secret is read directly into this one step's `with:` rather than
+      # into a job-level `env:` every earlier step (checkout,
+      # download-artifact, ensure-release) would otherwise also receive.
+      # `continue-on-error` is a backstop beside register.py's own
+      # catch-all: this step must never fail the release.
+      - name: Register release with the Greentic release catalogue
+        uses: greenticai/.github/.github/actions/register-greentic-release@main
+        continue-on-error: true
+        with:
+          admin-url: ${{ vars.GREENTIC_ADMIN_URL }}
+          repo: ${{ github.repository }}
+          name: ${{ inputs.package }}
+          version: ${{ inputs.version }}
+          dist-dir: .dist-staging
+          key: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}
