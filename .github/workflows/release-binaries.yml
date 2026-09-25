@@ -237,24 +237,31 @@ jobs:
     name: Attach binaries to GitHub Release
     runs-on: ubuntu-latest
     needs: build-binaries
-    env:
-      # Mapped to env because a reusable workflow's step `if:` cannot read
-      # the `secrets` context directly — this is the documented workaround.
-      GREENTIC_RELEASE_PUBLISHER_KEY: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}
     steps:
       - uses: actions/checkout@v4
 
-      # Mirrors the `Derive version from tag` step in build-binaries — that
-      # job's output is matrix-scoped and not visible here, and this job
-      # needs the bare version (without the `v` prefix) to match the
-      # archive filenames when registering the release below.
-      - name: Derive version from tag
+      # Feeds ONLY the optional registration step below — the archives
+      # themselves are already built and named by build-binaries (which has
+      # its own hard `GITHUB_REF_TYPE != "tag"` guard; that job already
+      # failed loudly if this ever ran from a non-tag ref). This step exists
+      # solely so this job has the bare version (without the `v` prefix,
+      # matching the archive filenames) to pass into registration — that
+      # job's own version output is matrix-scoped and not visible here.
+      # Unlike build-binaries' guard, this one must NOT fail the job over a
+      # non-tag ref: it warns and leaves `version` empty, which the
+      # registration step below reads as "skip".
+      - name: Derive version from tag (for release registration)
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "::warning::attach-to-release running from a non-tag ref (ref_type=${GITHUB_REF_TYPE}); skipping release-catalogue registration"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          else
+            tag="${GITHUB_REF_NAME}"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/download-artifact@v4
         with:
@@ -278,21 +285,28 @@ jobs:
 
       # Optional accelerator: push this release into greentic-admin's
       # release catalogue. Never the source of truth (the admin's own
-      # GitHub-release scanner registers the same release independently)
-      # and never fails the workflow — register.py always exits 0. Skipped
-      # entirely, at the workflow level, when the org secret is not
-      # configured (or not forwarded by this caller), so an unconfigured
-      # deployment sees no behavior change at all.
+      # GitHub-release scanner registers the same release independently).
+      # No secrets-based outer `if:` here — the composite action's own
+      # `if: inputs.admin-url != '' && inputs.key != ''` gate is what makes
+      # this a no-op when the org secret/var are unconfigured, so the
+      # secret is read directly into this one step's `with:` rather than
+      # into a job-level `env:` every earlier step (checkout,
+      # download-artifact, ensure-release) would otherwise also receive.
+      # The `steps.version...` guard IS still needed: it's how the non-tag
+      # skip above (which cannot fail the job) reaches this step.
+      # `continue-on-error` is a backstop beside register.py's own
+      # catch-all: this step must never fail the release.
       - name: Register release with the Greentic release catalogue
-        if: env.GREENTIC_RELEASE_PUBLISHER_KEY != ''
+        if: steps.version.outputs.version != ''
         uses: greenticai/.github/.github/actions/register-greentic-release@main
+        continue-on-error: true
         with:
           admin-url: ${{ vars.GREENTIC_ADMIN_URL }}
           repo: ${{ github.repository }}
           name: ${{ inputs.binary }}
           version: ${{ steps.version.outputs.version }}
           dist-dir: .dist-staging
-          key: ${{ env.GREENTIC_RELEASE_PUBLISHER_KEY }}
+          key: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}
 
   ghcr-publish:
     name: Push archives to GHCR

@@ -306,10 +306,6 @@ jobs:
     name: Attach binaries to dev Release
     runs-on: ubuntu-latest
     needs: build-binaries
-    env:
-      # Mapped to env because a reusable workflow's step `if:` cannot read
-      # the `secrets` context directly — this is the documented workaround.
-      GREENTIC_RELEASE_PUBLISHER_KEY: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -348,18 +344,22 @@ jobs:
 
       # Optional accelerator: push this release into greentic-admin's
       # release catalogue. Never the source of truth (the admin's own
-      # GitHub-release scanner registers the same release independently)
-      # and never fails the workflow — register.py always exits 0. Skipped
-      # entirely, at the workflow level, when the org secret is not
-      # configured (or not forwarded by this caller), so an unconfigured
-      # deployment sees no behavior change at all.
+      # GitHub-release scanner registers the same release independently).
+      # No outer `if:` here — the composite action's own
+      # `if: inputs.admin-url != '' && inputs.key != ''` gate is what makes
+      # this a no-op when the org secret/var are unconfigured, so the
+      # secret is read directly into this one step's `with:` rather than
+      # into a job-level `env:` every earlier step (checkout,
+      # download-artifact, ensure-release) would otherwise also receive.
+      # `continue-on-error` is a backstop beside register.py's own
+      # catch-all: this step must never fail the release.
       - name: Register release with the Greentic release catalogue
-        if: env.GREENTIC_RELEASE_PUBLISHER_KEY != ''
         uses: greenticai/.github/.github/actions/register-greentic-release@main
+        continue-on-error: true
         with:
           admin-url: ${{ vars.GREENTIC_ADMIN_URL }}
           repo: ${{ github.repository }}
           name: ${{ inputs.package }}
           version: ${{ inputs.version }}
           dist-dir: .dist-staging
-          key: ${{ env.GREENTIC_RELEASE_PUBLISHER_KEY }}
+          key: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}

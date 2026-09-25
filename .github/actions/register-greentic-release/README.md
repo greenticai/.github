@@ -37,14 +37,21 @@ organization secret. It also needs the **`GREENTIC_ADMIN_URL`**
 repository/organization variable naming the admin instance to register
 against.
 
-**It is safe to leave both unconfigured.** Neither `dev-release-binaries.yml`
-nor `release-binaries.yml` calls this action unless
-`secrets.GREENTIC_RELEASE_PUBLISHER_KEY` is non-empty (checked via a
-job-level `env` mapping, since a reusable workflow's step `if:` cannot read
-the `secrets` context directly), and the action itself no-ops when either
-`admin-url` or `key` is empty. Until both exist, this is a pure no-op —
-releases keep working exactly as before, and the admin still picks them up
-through its own scanner.
+**It is safe to leave both unconfigured.** `dev-release-binaries.yml` and
+`release-binaries.yml` pass `secrets.GREENTIC_RELEASE_PUBLISHER_KEY` and
+`vars.GREENTIC_ADMIN_URL` straight into this action's `with:` on their
+registration step — deliberately with no outer secrets-based `if:` on that
+step, so the secret is read into exactly one step rather than a job-level
+`env:` every earlier step (checkout, download-artifact, the release-attach
+step) would then also receive. This action's own
+`if: inputs.admin-url != '' && inputs.key != ''` gate is what makes it a
+no-op when either is empty. `register.py` is additionally wrapped in a
+single top-level `try`/`except Exception`, and the calling step sets
+`continue-on-error: true` as a backstop, so a malformed input, a missing
+env var, or an admin/network failure can never fail the workflow. Until
+both the secret and the variable exist, this is a pure no-op — releases
+keep working exactly as before, and the admin still picks them up through
+its own scanner.
 
 **Reusable-workflow callers must opt in.** Because GitHub Actions does not
 forward organization secrets into a *called* reusable workflow unless the
