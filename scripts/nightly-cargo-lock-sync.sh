@@ -61,6 +61,11 @@ PR_CREATE_RETRY_SEC="${PR_CREATE_RETRY_SEC:-5}"
 # the way nightly-develop-orchestrate.sh does.
 REAPER_POLL_SEC="${REAPER_POLL_SEC:-90}"
 REAPER_MAX_SEC="${REAPER_MAX_SEC:-2700}"
+# Immediate retries of a merge that failed with a transient server error (a
+# 502 from the merge API, observed in run 36395828744). Not a substitute for
+# the next poll — just enough to ride out a blip without waiting 90s.
+MERGE_RETRY_TRIES="${MERGE_RETRY_TRIES:-2}"
+MERGE_RETRY_SEC="${MERGE_RETRY_SEC:-10}"
 
 log()  { echo "$1"; }
 err()  { echo "::error::$1"; }
@@ -615,6 +620,9 @@ reap_pending() {
       state=$(jq -r '.state' <<<"$json")
       if [[ "$state" != "OPEN" ]]; then
         # Someone else merged or closed it under us — count it resolved.
+        # This is also where a merge that answered 5xx but actually landed
+        # shows up.
+        unset 'merge_err_last[$entry]'
         ((c_merged++)) || true
         continue
       fi
@@ -625,11 +633,13 @@ reap_pending() {
       n_failed=$(checks_failed "$json")
 
       if [[ "$mergeable" == "CONFLICTING" ]]; then
+        unset 'merge_err_last[$entry]'
         ((c_conflict++)) || true
         conflict_urls+=("$name: $url")
         continue
       fi
       if (( n_failed > 0 )); then
+        unset 'merge_err_last[$entry]'
         ((c_ci_red++)) || true
         red_urls+=("$name: $url")
         continue
@@ -639,6 +649,9 @@ reap_pending() {
       # give it one more round before trusting it.
       if (( n_pending > 0 )) || [[ "$mergeable" == "UNKNOWN" ]] \
          || (( n_checks == 0 && round == 1 )); then
+        # Back on CI (a new check, or mergeability recomputing): an earlier
+        # merge error no longer describes this PR.
+        unset 'merge_err_last[$entry]'
         still+=("$entry")
         continue
       fi
@@ -660,14 +673,32 @@ reap_pending() {
       # saw it coming. Retrying cannot help — a human on the allowlist merged
       # all 19 by hand with this same command. The repair is to put the App on
       # the allowlist: scripts/allow-bot-merge-on-protected-branches.sh.
-      local merge_out
-      if merge_out=$(gh pr merge --repo "$full" "$url" --squash 2>&1); then
+      #
+      # The error is only RECORDED here, not counted. The PR goes back onto
+      # `still`, and a later poll may merge it — run 36395828744 merged a PR
+      # whose first attempt had answered 502, then failed the job anyway
+      # because the counter had already been bumped (once per failing poll,
+      # not once per PR). What counts is the PR's state when the window
+      # closes; the tally happens after the loop below.
+      local merge_out merge_ok=0 try
+      for (( try = 0; try <= MERGE_RETRY_TRIES; try++ )); do
+        if merge_out=$(gh pr merge --repo "$full" "$url" --squash 2>&1); then
+          merge_ok=1
+          break
+        fi
+        # Retry immediately only on a transient server error; a policy
+        # refusal answers the same way every time.
+        grep -qiE 'HTTP 5[0-9][0-9]|\b50[234]\b|bad gateway|service unavailable|gateway time-?out|server error' \
+          <<<"$merge_out" || break
+        (( try < MERGE_RETRY_TRIES )) && sleep "$MERGE_RETRY_SEC"
+      done
+      if (( merge_ok )); then
+        unset 'merge_err_last[$entry]'
         ((c_merged++)) || true
         log "  ✓ merged after green CI: $name — $url"
       else
-        ((c_merge_err++)) || true
-        merge_err_urls+=("$name: $url")
-        warn "$name merge failed while green+MERGEABLE: $(head -2 <<<"$merge_out" | tr '\n' ' ') — $url"
+        merge_err_last[$entry]="$(head -2 <<<"$merge_out" | tr '\n' ' ')"
+        warn "$name merge failed while green+MERGEABLE: ${merge_err_last[$entry]} — $url"
         if grep -qi 'base branch policy prohibits the merge' <<<"$merge_out"; then
           warn "$name: the greentic-ci App is not on develop's protection allowlist — run scripts/allow-bot-merge-on-protected-branches.sh"
         fi
@@ -686,6 +717,25 @@ reap_pending() {
       fi
     fi
   done
+
+  # Tally merge errors once per PR, and only for PRs the window closed on
+  # with a merge refusal as their LAST observation. Those leave pending_prs
+  # here, so a PR is never reported both "merge failed" and "still on CI" —
+  # its CI had finished, which is the lie the merge-error bucket exists to
+  # stop telling. A PR that failed once and merged later is only "merged".
+  local left=() entry name
+  for entry in "${pending_prs[@]}"; do
+    if [[ -n "${merge_err_last[$entry]+set}" ]]; then
+      name="${entry%%|*}"; name="${name##*/}"
+      ((c_merge_err++)) || true
+      merge_err_urls+=("$name: ${entry##*|} — ${merge_err_last[$entry]}")
+    else
+      left+=("$entry")
+    fi
+  done
+  pending_prs=()
+  (( ${#left[@]} > 0 )) && pending_prs=("${left[@]}")
+  return 0
 }
 
 # ── Pre-compute shared state
@@ -713,6 +763,9 @@ pending_urls=()
 merge_err_urls=()
 failed_repos=()
 pending_prs=()
+# Last merge error per parked PR ("org/name|url" → message), written by
+# reap_pending and tallied once when its window closes.
+declare -A merge_err_last=()
 
 log ""
 log "━━━ Cargo.lock sync ━━━"
@@ -796,11 +849,12 @@ log "  Failed:                      $c_failed"
   fi
   if [[ ${#merge_err_urls[@]} -gt 0 ]]; then
     echo ""
-    echo "### Green + MERGEABLE but the merge API refused"
+    echo "### Green + MERGEABLE but still unmerged when the window closed"
     echo ""
-    echo "Retrying will not help. The usual cause is that \`develop\` protection"
-    echo "restricts pushes to an allowlist the greentic-ci App is not on — repair"
-    echo "with \`bash scripts/allow-bot-merge-on-protected-branches.sh\`."
+    echo "Each line carries the last merge error. A policy refusal will not heal"
+    echo "by retrying: the usual cause is that \`develop\` protection restricts"
+    echo "pushes to an allowlist the greentic-ci App is not on — repair with"
+    echo "\`bash scripts/allow-bot-merge-on-protected-branches.sh\`."
     echo ""
     for u in "${merge_err_urls[@]}"; do echo "- $u"; done
   fi
@@ -826,9 +880,12 @@ if [[ ${#summary_parts[@]} -gt 0 ]]; then
 fi
 echo "cargo_lock_summary=${joined}" >> "${GITHUB_OUTPUT:-/dev/null}"
 
-# Fail the job on hard errors, and on a merge the API refused while the PR was
-# green and MERGEABLE. Conflict / red-CI / still-on-CI PRs stay non-fatal —
-# those are expected and clear via manual resolution or the next nightly.
+# Fail the job on hard errors, and on a PR the window closed on while green and
+# MERGEABLE with a refused merge as its last attempt. Conflict / red-CI /
+# still-on-CI PRs stay non-fatal — those are expected and clear via
+# manual resolution or the next nightly. A merge that failed and then succeeded
+# on a later poll is not a merge error (see the tally at the end of
+# reap_pending).
 #
 # c_merge_err is fatal because nothing in the pipeline retries it: the branch
 # protection that causes it does not heal on its own, so a green run here means
