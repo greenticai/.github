@@ -176,7 +176,17 @@ jobs:
             exit 1
           fi
           script="${RUNNER_TEMP}/stamp-binary-version.py"
-          curl -fsSL --retry 5 -o "$script" \
+          # `--retry` alone does not retry a TLS handshake failure (exit 35),
+          # and Windows' schannel fails the handshake outright whenever the
+          # certificate-revocation server is unreachable
+          # (CRYPT_E_REVOCATION_OFFLINE) — which halted a whole Nightly
+          # Develop run on one leg. Retry every error, and on Windows skip
+          # the revocation check; the download is still TLS-verified.
+          curl_opts=(-fsSL --retry 5 --retry-delay 3 --retry-all-errors)
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then
+            curl_opts+=(--ssl-no-revoke)
+          fi
+          curl "${curl_opts[@]}" -o "$script" \
             https://raw.githubusercontent.com/greenticai/.github/main/scripts/stamp-binary-version.py
           "$py" "$script" --package "$PACKAGE" --version "$VERSION"
           if [ -f Cargo.lock ]; then
