@@ -291,6 +291,43 @@ has_changes() {
 }
 
 # ── Dispatch + detect ────────────────────────────────────────────
+# Finds the run a `gh workflow run` just created: a `workflow_dispatch` run on
+# $BRANCH whose ID is above $before_id AND which was created at or after
+# $since_epoch. Prints the OLDEST such run, or nothing.
+#
+# The ID check alone is not enough. On 2026-09-30 (nightly 36686554786) the
+# Actions API served a STALE run list for greentic-mcp: both the before-ID read
+# and a detection poll came back from a view weeks out of date, so the
+# 2026-08-24 run 32685545595 — a failed push run — cleared `> before_id`, was
+# adopted as "the dispatched run", and halted tier 4. The real dispatched run,
+# 36690505647, succeeded. A stale list was reproduced by hand the same morning
+# (`gh run list` topped by a 2026-08-17 run, then correct seconds later), so
+# this is a read the orchestrator has to survive, not a one-off.
+#
+# `createdAt` is what makes a stale answer harmless: a run created before we
+# dispatched cannot be ours however its ID compares. The caller subtracts a
+# clock-skew allowance from $since_epoch; the runs a stale view hands back are
+# days or weeks old, so the margin never has to be tight.
+find_dispatched_run() {
+  local repo="$1"
+  local before_id="$2"
+  local since_epoch="$3"
+
+  [[ "$before_id" =~ ^[0-9]+$ ]] || return 1
+  [[ "$since_epoch" =~ ^[0-9]+$ ]] || return 1
+
+  gh run list --repo "$repo" --workflow "$WORKFLOW" --branch "$BRANCH" \
+    --event workflow_dispatch --limit 10 \
+    --json databaseId,createdAt,event \
+    --jq "[ .[]
+            | select(.event == \"workflow_dispatch\")
+            | select(.databaseId > $before_id)
+            | select((.createdAt | fromdateiso8601) >= $since_epoch) ]
+          | sort_by(.databaseId) | .[0].databaseId // empty" 2>/dev/null
+}
+
+DISPATCH_SKEW=120   # seconds of runner↔GitHub clock skew tolerated in detection
+
 # Dispatches workflow_dispatch and returns the new run ID.
 dispatch() {
   local repo="$1"
@@ -303,6 +340,10 @@ dispatch() {
     --branch "$BRANCH" --limit 1 \
     --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null) || before_id=0
 
+  # Anything created before this moment (less the skew allowance) is not ours.
+  local since_epoch
+  since_epoch=$(( $(date -u +%s) - DISPATCH_SKEW ))
+
   # Dispatch (capture output to keep URL off stdout — caller reads stdout for run ID)
   local dispatch_err
   if ! dispatch_err=$(gh workflow run "$WORKFLOW" --repo "$repo" --ref "$BRANCH" 2>&1); then
@@ -310,15 +351,13 @@ dispatch() {
     return 1
   fi
 
-  # Poll for new run (ID > before_id)
+  # Poll for the new run — see find_dispatched_run for why the ID alone lies.
   local run_id
   for _ in $(seq 1 "$DISPATCH_TIMEOUT"); do
     sleep "$DISPATCH_DETECT"
-    run_id=$(gh run list --repo "$repo" --workflow "$WORKFLOW" \
-      --branch "$BRANCH" --limit 1 \
-      --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null) || continue
+    run_id=$(find_dispatched_run "$repo" "$before_id" "$since_epoch") || continue
 
-    if [[ "$run_id" -gt "$before_id" ]]; then
+    if [[ -n "$run_id" ]]; then
       echo "$run_id"
       return 0
     fi
