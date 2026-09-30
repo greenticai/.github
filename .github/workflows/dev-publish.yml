@@ -77,7 +77,9 @@ jobs:
   publish:
     name: Publish dev crates to crates.io
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90, not 60: the publish step may spend up to RATE_LIMIT_BUDGET_SEC (60
+    # min) waiting out crates.io's rate limit, on top of checkout and packaging.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
@@ -334,6 +336,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          # One wall-clock budget for rate-limit waits, shared by every crate
+          # this job publishes. crates.io's "update an existing crate" bucket
+          # is shared across the whole org token and refills ~1/min, so when
+          # many repos publish at once (the nightly Cargo.lock sync merges ~20
+          # lock PRs within minutes) every job sleeps to the same reset and
+          # only one wins each minute. A fixed attempt count then fails
+          # whichever jobs lose 15 draws in a row — 5 repos on 2026-09-29
+          # (greentic-dev 36610061608, greentic-flow 36610259807, …), all of
+          # which published fine when rerun later. Waiting on a clock instead
+          # lets the queue drain.
+          rate_limit_deadline=$(( $(date -u +%s) + ${RATE_LIMIT_BUDGET_SEC:-3600} ))
+
           # Accepts two forms (from the effective publish list):
           #   publish_entry pkg <crate>        → cargo publish -p <crate>
           #   publish_entry manifest <path>    → cargo publish --manifest-path <path>
@@ -372,14 +386,19 @@ jobs:
             # the advertised reset advanced exactly 60s per attempt.
             # Retries are free when there is no rate limit (the loop returns on
             # first success), so the budget is sized for the worst repo.
+            #
+            # A 429 does NOT count against max_retries: it is bounded by the
+            # job-wide rate_limit_deadline instead (see the top of this step).
+            # max_retries bounds only the other transient errors.
             local max_retries=15
             local delay=10
             local attempt=0
+            local rate_limited=0
             local output=""
 
             while [ "$attempt" -lt "$max_retries" ]; do
               attempt=$((attempt + 1))
-              echo "::group::Publishing ${label} (attempt ${attempt}/${max_retries})"
+              echo "::group::Publishing ${label} (attempt ${attempt}/${max_retries}, rate-limited ${rate_limited}x)"
 
               local cmd_ok=1
               if [ "$kind" = "manifest" ]; then
@@ -405,14 +424,15 @@ jobs:
                 return 0
               fi
 
-              if echo "$output" | grep -qiE "429|503|502|500|rate.limit|timed.out|connection.*reset|broken.pipe"; then
+              if echo "$output" | grep -qiE "429|too many requests|rate.limit"; then
                 # crates.io 429 bodies carry a reset hint:
                 #   "Please try again after Mon, 27 Apr 2026 09:04:14 GMT".
-                # Sleep until that timestamp + a 5s buffer when parseable; otherwise
-                # fall back to exponential backoff.
-                local reset_str reset_epoch wait_s
+                # Sleep until that timestamp + a 5s buffer, plus up to 30s of
+                # jitter so the jobs queued behind the same reset do not all
+                # retry in the same second. Falls back to 60s when unparseable.
+                local reset_str reset_epoch wait_s now
                 reset_str=$(echo "$output" | sed -n 's/.*Please try again after \([^.]*GMT\).*/\1/p' | head -n 1)
-                wait_s=""
+                wait_s=60
                 if [ -n "$reset_str" ]; then
                   reset_epoch=$(date -u -d "$reset_str" +%s 2>/dev/null || true)
                   if [ -n "$reset_epoch" ]; then
@@ -421,15 +441,24 @@ jobs:
                     [ "$wait_s" -gt 180 ] && wait_s=180
                   fi
                 fi
-                if [ -n "$wait_s" ]; then
-                  echo "⚠ Rate limited, sleeping ${wait_s}s until reset (${reset_str})..."
-                  sleep "$wait_s"
-                else
-                  echo "⚠ Transient error, retrying in ${delay}s..."
-                  sleep "$delay"
-                  delay=$((delay * 2))
-                  [ "$delay" -gt 120 ] && delay=120
+                wait_s=$((wait_s + RANDOM % 30))
+                now=$(date -u +%s)
+                if [ $((now + wait_s)) -ge "$rate_limit_deadline" ]; then
+                  echo "::error::Failed to publish ${label}: still rate limited by crates.io after the ${RATE_LIMIT_BUDGET_SEC:-3600}s budget (rate-limited ${rate_limited}x)"
+                  return 1
                 fi
+                rate_limited=$((rate_limited + 1))
+                attempt=$((attempt - 1))
+                echo "⚠ Rate limited (${rate_limited}x), sleeping ${wait_s}s until reset (${reset_str:-unknown}); $((rate_limit_deadline - now))s of rate-limit budget left..."
+                sleep "$wait_s"
+                continue
+              fi
+
+              if echo "$output" | grep -qiE "503|502|500|timed.out|connection.*reset|broken.pipe"; then
+                echo "⚠ Transient error, retrying in ${delay}s..."
+                sleep "$delay"
+                delay=$((delay * 2))
+                [ "$delay" -gt 120 ] && delay=120
                 continue
               fi
 
