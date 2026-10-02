@@ -1,0 +1,57 @@
+name: "Register Greentic Release"
+description: >-
+  Best-effort push of a just-published GitHub release's archives to
+  greentic-admin's release catalogue (POST /api/v1/releases). This is an
+  ACCELERATOR, never the source of truth: the admin also registers the same
+  release from its own GitHub-release scanner. register.py therefore never
+  fails the calling workflow — any admin/network failure, a missing
+  admin-url, a missing key, or no matching archives all exit 0, printing a
+  `::warning::` instead.
+
+inputs:
+  admin-url:
+    description: >-
+      Base URL of the greentic-admin instance (e.g.
+      https://admin.demo.greentic.cloud), normally sourced from the
+      `GREENTIC_ADMIN_URL` repository/organization variable. Leave empty to
+      skip registration.
+    required: true
+  repo:
+    description: "owner/repo the release was published from, normally ${{ github.repository }}."
+    required: true
+  name:
+    description: >-
+      Binary/package name as it appears in the archive filename, without any
+      `-dev` infix (dev-lane archives are matched with or without it).
+    required: true
+  version:
+    description: "Released version string, matching the release tag's v<version>."
+    required: true
+  dist-dir:
+    description: "Directory holding the built *.tgz/*.zip archives and their *.sha256 sidecars."
+    required: true
+  key:
+    description: >-
+      `gts_` bearer key with scope `release_publisher`, normally sourced from
+      the `GREENTIC_RELEASE_PUBLISHER_KEY` organization secret. Leave empty
+      to skip registration.
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Register release with greentic-admin
+      # Belt-and-braces: the calling workflow is expected to gate the whole
+      # step on the secret being non-empty (see the two release-binaries
+      # workflows), but this action degrades safely on its own too — an
+      # empty admin-url or key means "not configured yet", not an error.
+      if: inputs.admin-url != '' && inputs.key != ''
+      shell: bash
+      env:
+        ADMIN_URL: ${{ inputs.admin-url }}
+        REPO: ${{ inputs.repo }}
+        NAME: ${{ inputs.name }}
+        VERSION: ${{ inputs.version }}
+        DIST_DIR: ${{ inputs.dist-dir }}
+        KEY: ${{ inputs.key }}
+      run: python3 "${{ github.action_path }}/register.py"

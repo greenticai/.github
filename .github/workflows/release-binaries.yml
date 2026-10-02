@@ -60,6 +60,16 @@ on:
       GHCR_TOKEN:
         description: "Optional PAT for GHCR push; falls back to GITHUB_TOKEN"
         required: false
+      GREENTIC_RELEASE_PUBLISHER_KEY:
+        description: >-
+          Optional `gts_` key (scope `release_publisher`) used to push this
+          release into greentic-admin's release catalogue as an accelerator
+          — the admin also registers it independently from the GitHub
+          release itself. Omit (or have the caller not pass it) to skip;
+          nothing else in this workflow depends on it. A caller must pass
+          `secrets: inherit`, or this secret explicitly, on the job that
+          calls this reusable workflow, or the registration step no-ops.
+        required: false
 
 permissions:
   contents: write
@@ -230,6 +240,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Feeds ONLY the optional registration step below — the archives
+      # themselves are already built and named by build-binaries (which has
+      # its own hard `GITHUB_REF_TYPE != "tag"` guard; that job already
+      # failed loudly if this ever ran from a non-tag ref). This step exists
+      # solely so this job has the bare version (without the `v` prefix,
+      # matching the archive filenames) to pass into registration — that
+      # job's own version output is matrix-scoped and not visible here.
+      # Unlike build-binaries' guard, this one must NOT fail the job over a
+      # non-tag ref: it warns and leaves `version` empty, which the
+      # registration step below reads as "skip".
+      - name: Derive version from tag (for release registration)
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "::warning::attach-to-release running from a non-tag ref (ref_type=${GITHUB_REF_TYPE}); skipping release-catalogue registration"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          else
+            tag="${GITHUB_REF_NAME}"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/download-artifact@v4
         with:
           # Only this package's artifacts: in multi-binary repos two parallel
@@ -249,6 +282,31 @@ jobs:
           title: ${{ github.ref_name }}
           generate-notes: ${{ inputs.generate-release-notes }}
           github-token: ${{ github.token }}
+
+      # Optional accelerator: push this release into greentic-admin's
+      # release catalogue. Never the source of truth (the admin's own
+      # GitHub-release scanner registers the same release independently).
+      # No secrets-based outer `if:` here — the composite action's own
+      # `if: inputs.admin-url != '' && inputs.key != ''` gate is what makes
+      # this a no-op when the org secret/var are unconfigured, so the
+      # secret is read directly into this one step's `with:` rather than
+      # into a job-level `env:` every earlier step (checkout,
+      # download-artifact, ensure-release) would otherwise also receive.
+      # The `steps.version...` guard IS still needed: it's how the non-tag
+      # skip above (which cannot fail the job) reaches this step.
+      # `continue-on-error` is a backstop beside register.py's own
+      # catch-all: this step must never fail the release.
+      - name: Register release with the Greentic release catalogue
+        if: steps.version.outputs.version != ''
+        uses: greenticai/.github/.github/actions/register-greentic-release@main
+        continue-on-error: true
+        with:
+          admin-url: ${{ vars.GREENTIC_ADMIN_URL }}
+          repo: ${{ github.repository }}
+          name: ${{ inputs.binary }}
+          version: ${{ steps.version.outputs.version }}
+          dist-dir: .dist-staging
+          key: ${{ secrets.GREENTIC_RELEASE_PUBLISHER_KEY }}
 
   ghcr-publish:
     name: Push archives to GHCR
