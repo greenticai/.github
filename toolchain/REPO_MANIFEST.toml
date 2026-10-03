@@ -769,7 +769,10 @@ variant = "host"
 tier = 8
 publishes = []
 version-track = { from = "1.0", to = "1.1" }
-dev-publish-enabled = true
+# false since 2026-10-03: greentic-designer deleted its dev-publish.yml (CI now runs
+# only on a version bump, chained before deploy), so the nightly's dispatch of it
+# answered HTTP 422 and failed the whole run. `publishes = []`: it was CI-only.
+dev-publish-enabled = false
 weekly-stable-enabled = true
 nightly-codex-enabled = false
 
