@@ -154,21 +154,61 @@ jobs:
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
 
+      # Three flags/assertions below, each fixing a distinct failure mode.
+      # Copy all of them together if you lift this pattern into another repo.
+      #
       # --force: Swatinem/rust-cache restores Cargo's install-tracking
       # metadata (~/.cargo/.crates2.json) but NOT the actual binaries under
       # ~/.cargo/bin/. Without --force, binstall reads the stale metadata,
       # concludes "already installed", skips — and the subsequent
       # `cargo llvm-cov …` step fails with `no such command: llvm-cov`.
+      #
+      # GITHUB_TOKEN: binstall resolves each crate's prebuilt binary through
+      # api.github.com. Unauthenticated, that is rate-limited per runner IP
+      # (60 req/h shared across every job on that IP) rather than per repo, so
+      # a busy org intermittently gets 403s that have nothing to do with the
+      # commit under test. Authenticated it is 5000 req/h. `secrets.GITHUB_TOKEN`
+      # is minted automatically for every caller of this reusable — callers do
+      # NOT need `secrets: inherit` for it (it is the same token the gate job
+      # above reads as `github.token`).
+      #
+      # --disable-strategies compile: a 403 does NOT fail binstall. It silently
+      # degrades to the `compile` strategy, which shells out to
+      # `cargo install <tool>` WITHOUT --locked. cargo-nextest carries a
+      # deliberate `compile_error!` rejecting exactly that ("Nextest does not
+      # support being installed without --locked"), so the job burns ~11 minutes
+      # compiling toward a link that can never happen and exits 70 — presenting
+      # as a Rust build break in a repo whose code is fine. All three tools here
+      # publish prebuilt binaries for the runner targets, so the compile strategy
+      # is never legitimately used; disabling it converts a slow, misattributed
+      # failure into a fast, correctly-attributed one.
+      # Root-caused in greenticai/greentic-cap#39.
+      #
+      # command -v: binstall can report success while leaving nothing on PATH.
+      # Assert here so the failure surfaces at the install step rather than two
+      # steps later as a confusing "no such command".
       - name: Install cargo-llvm-cov
-        run: cargo binstall -y --force cargo-llvm-cov
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo binstall -y --force --disable-strategies compile cargo-llvm-cov
+          command -v cargo-llvm-cov
 
       - name: Install cargo-nextest
         if: ${{ inputs.install-cargo-nextest }}
-        run: cargo binstall -y --force cargo-nextest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo binstall -y --force --disable-strategies compile cargo-nextest
+          command -v cargo-nextest
 
       - name: Install greentic-dev
         if: ${{ inputs.install-greentic-dev }}
-        run: cargo binstall -y --force greentic-dev
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo binstall -y --force --disable-strategies compile greentic-dev
+          command -v greentic-dev
 
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
