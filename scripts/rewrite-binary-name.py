@@ -771,6 +771,37 @@ def resolve_workspace_inheritance(copy_manifest: Path, workspace_root: Path) -> 
         tomli_w.dump(data, fh)
 
 
+def drop_path_only_dev_dependencies(copy_manifest: Path) -> bool:
+    """Drop `foo = { path = "..." }` dev-dependencies (no `version`) from the copy.
+
+    `cargo publish` strips them anyway, and the copy cannot keep them: it is
+    renamed to `<crate>-dev`, so a self dev-dependency such as
+    `greentic-start = { path = ".", features = ["test-support"] }` points at a
+    directory whose package no longer carries that name -- `no matching
+    package named greentic-start found`. Seen on greenticai/greentic-start
+    dev-publish after #709 added exactly that edge. This runs for every
+    dual-role copy; `resolve_workspace_inheritance` does the same only when the
+    crate sits in a workspace, which a single-package repo does not.
+
+    Returns True when the manifest was changed.
+    """
+    with copy_manifest.open("rb") as fh:
+        data = tomllib.load(fh)
+    dev_deps = data.get("dev-dependencies", {})
+    doomed = [
+        name
+        for name, spec in dev_deps.items()
+        if isinstance(spec, dict) and "path" in spec and "version" not in spec
+    ]
+    if not doomed:
+        return False
+    for name in doomed:
+        del dev_deps[name]
+    with copy_manifest.open("wb") as fh:
+        tomli_w.dump(data, fh)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -819,6 +850,9 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"[rewrite-binary-name] resolved workspace inheritance from {ws_root}"
             )
+
+        if drop_path_only_dev_dependencies(copy_manifest):
+            print("[rewrite-binary-name] dropped path-only dev-dependencies from the copy")
 
         print(
             f"[rewrite-binary-name] staged copy at {copy_manifest.parent} "

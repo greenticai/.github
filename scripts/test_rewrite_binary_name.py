@@ -1788,3 +1788,30 @@ def test_path_only_dev_dep_is_dropped_when_the_normal_edge_goes_to_the_registry(
         assert "sib" not in dev, dev
         # A registry dev-dependency is untouched.
         assert dev["tempfile"] == "3", dev
+
+
+def test_self_path_dev_dep_is_dropped_outside_a_workspace() -> None:
+    """A single-package repo with a self dev-dependency (greentic-start #709).
+
+    No parent workspace, so resolve_workspace_inheritance never runs; the copy
+    is renamed to thebin-dev and `thebin = { path = "." }` would no longer
+    resolve. It must be dropped, while registry dev-dependencies stay.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root,
+            "Cargo.toml",
+            '[package]\nname = "thebin"\nversion = "1.2.0-dev.0"\n\n'
+            "[dev-dependencies]\n"
+            'thebin = { path = ".", features = ["test-support"] }\n'
+            'tempfile = "3"\n',
+        )
+        _write(root, "src/main.rs", "fn main() {}\n")
+
+        _run(root, "thebin", "--dual-role")
+
+        copy = _load(root / "target" / "bifurcate" / "thebin-dev" / "Cargo.toml")
+        dev = copy.get("dev-dependencies", {})
+        assert "thebin" not in dev, dev
+        assert dev["tempfile"] == "3", dev
