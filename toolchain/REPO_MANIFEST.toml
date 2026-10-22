@@ -81,7 +81,7 @@ nightly-codex-enabled = false
 org = "greenticai"
 variant = "host"
 tier = 0
-publishes = ["greentic-cap-types", "greentic-cap-profile", "greentic-cap-resolver", "greentic-cap-schema", "greentic-cap-core", "greentic-cap"]
+publishes = ["greentic-cap-types", "greentic-cap-guest", "greentic-cap-profile", "greentic-cap-resolver", "greentic-cap-runtime", "greentic-cap-schema", "greentic-cap-core", "greentic-cap-wasmtime", "greentic-cap"]
 version-track = { from = "1.1", to = "1.2" }
 dev-publish-enabled = true
 weekly-stable-enabled = true
