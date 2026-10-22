@@ -168,11 +168,34 @@ jobs:
 
       - name: Install cargo-audit
         if: ${{ inputs.run-cargo-audit }}
-        run: cargo binstall -y cargo-audit
+        env:
+          # Unauthenticated api.github.com lookups are rate-limited per runner IP.
+          # On a 403 binstall does not fail -- it silently degrades to a ~10 minute
+          # source build, so a throttled audit looks merely slow instead of broken.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Forbidding the source fallback is deliberate here (unlike pr-ci's
+        # cargo-component step): this is a nightly, not a PR gate, so a loud
+        # failure is better than a silent slow one. cargo-audit publishes no
+        # upstream release assets, so the prebuilt comes from cargo-quickinstall.
+        run: |
+          # --force: Swatinem/rust-cache restores ~/.cargo/.crates.toml, so binstall
+          # sees the tool as already installed and exits 1 -- failing the step even
+          # though nothing is wrong. Sibling repos hit this same trap.
+          cargo binstall -y --force --disable-strategies compile cargo-audit
+          command -v cargo-audit
 
       - name: Install cargo-deny
         if: ${{ inputs.run-cargo-deny }}
-        run: cargo binstall -y cargo-deny
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # cargo-deny has both first-party release assets and a quickinstall build,
+        # so it is the least exposed of the two.
+        run: |
+          # --force: Swatinem/rust-cache restores ~/.cargo/.crates.toml, so binstall
+          # sees the tool as already installed and exits 1 -- failing the step even
+          # though nothing is wrong. Sibling repos hit this same trap.
+          cargo binstall -y --force --disable-strategies compile cargo-deny
+          command -v cargo-deny
 
       - if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
