@@ -52,6 +52,10 @@ MERGEABLE_POLL_SEC="${MERGEABLE_POLL_SEC:-3}"
 # genuinely broken repo still reports within the job's normal runtime.
 PR_CREATE_TRIES="${PR_CREATE_TRIES:-3}"
 PR_CREATE_RETRY_SEC="${PR_CREATE_RETRY_SEC:-5}"
+# Retries for the bot-branch push — see push_bot_branch. Backoff is linear
+# (5s, 10s) so three attempts ride out a short GitHub blip in ~15s.
+PUSH_TRIES="${PUSH_TRIES:-3}"
+PUSH_RETRY_SEC="${PUSH_RETRY_SEC:-5}"
 
 # The reap phase re-polls parked PRs until their checks finish, bounded so the
 # job stays inside its timeout and the 1-hour App-token TTL. Overridable so a
@@ -288,6 +292,53 @@ ensure_pr() {
   done
 
   err "[${full##*/}] PR create failed after $PR_CREATE_TRIES attempts: $create_out"
+  return 1
+}
+
+# ── Push the bot branch, retrying GitHub-side 5xx.
+#
+# The push used to be a single attempt, so one server error failed the repo and
+# the whole Cargo.lock sync job. Observed 2026-11-04 in run 41800545884, during
+# a GitHub Git Operations incident: 8 repos answered
+#
+#   remote: Internal Server Error
+#   remote: fatal error in commit_refs_rules
+#
+# Only those transient server errors are retried. A rejection that means
+# something (protected branch, stale lease, auth) fails at once: retrying it
+# cannot succeed and would hide a real condition.
+#
+# A 5xx does not prove the push failed. If the server applied the ref and then
+# errored, retrying with the original lease would fail as "stale info" even
+# though the branch is already right. So after each transient failure the remote
+# ref is compared with the local HEAD, and a match counts as success.
+push_bot_branch() {
+  local dir="$1" auth_url="$2" lease_sha="$3" errfile="$4"
+  local attempt local_sha remote_sha
+
+  local_sha=$( cd "$dir" && git rev-parse HEAD )
+
+  for (( attempt = 1; attempt <= PUSH_TRIES; attempt++ )); do
+    if ( cd "$dir" && git push "--force-with-lease=$BRANCH:$lease_sha" \
+           "$auth_url" "$BRANCH" --quiet ) 2>"$errfile"; then
+      return 0
+    fi
+
+    if ! grep -Eiq 'Internal Server Error|commit_refs_rules|Bad Gateway|Service Unavailable|Gateway Time-?out|returned error: 5[0-9][0-9]|unexpected disconnect|early EOF' "$errfile"; then
+      return 1
+    fi
+
+    remote_sha=$( cd "$dir" && git ls-remote "$auth_url" "refs/heads/$BRANCH" 2>/dev/null | cut -f1 )
+    if [[ -n "$remote_sha" && "$remote_sha" == "$local_sha" ]]; then
+      warn "${dir##*/} push answered a server error but the branch is already at $local_sha — treating as pushed"
+      return 0
+    fi
+
+    if (( attempt < PUSH_TRIES )); then
+      warn "${dir##*/} push attempt $attempt hit a transient server error, retrying: $(tail -1 "$errfile")"
+      sleep $(( PUSH_RETRY_SEC * attempt ))
+    fi
+  done
   return 1
 }
 
@@ -564,9 +615,7 @@ except Exception:
     lease_sha=$( cd "$dir" && git rev-parse "refs/remotes/origin/$BRANCH" 2>/dev/null )
   fi
 
-  if ! ( cd "$dir" && git push "--force-with-lease=$BRANCH:$lease_sha" \
-          "$auth_url" "$BRANCH" --quiet ) \
-       2>"$WORK_DIR/${name}.push.err"; then
+  if ! push_bot_branch "$dir" "$auth_url" "$lease_sha" "$WORK_DIR/${name}.push.err"; then
     err "[$name] push failed"
     sed 's/^/    /' "$WORK_DIR/${name}.push.err" >&2
     out_status="failed"
